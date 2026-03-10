@@ -10,6 +10,9 @@ use primary::{Certificate, Primary};
 use store::Store;
 use tokio::sync::mpsc::{channel, Receiver};
 use worker::Worker;
+use crypto::Hash as _; // <--- 新增这行，为了能调用 .digest()
+use log::info;
+use mrv_executor::MrvExecutor;
 
 /// The default channel capacity.
 pub const CHANNEL_CAPACITY: usize = 1_000;
@@ -66,6 +69,73 @@ async fn main() -> Result<()> {
 }
 
 // Runs either a worker or a primary.
+// async fn run(matches: &ArgMatches<'_>) -> Result<()> {
+//     let key_file = matches.value_of("keys").unwrap();
+//     let committee_file = matches.value_of("committee").unwrap();
+//     let parameters_file = matches.value_of("parameters");
+//     let store_path = matches.value_of("store").unwrap();
+
+//     // Read the committee and node's keypair from file.
+//     let keypair = KeyPair::import(key_file).context("Failed to load the node's keypair")?;
+//     let committee =
+//         Committee::import(committee_file).context("Failed to load the committee information")?;
+
+//     // Load default parameters if none are specified.
+//     let parameters = match parameters_file {
+//         Some(filename) => {
+//             Parameters::import(filename).context("Failed to load the node's parameters")?
+//         }
+//         None => Parameters::default(),
+//     };
+
+//     // Make the data store.
+//     let store = Store::new(store_path).context("Failed to create a store")?;
+
+//     // Channels the sequence of certificates.
+//     let (tx_output, rx_output) = channel(CHANNEL_CAPACITY);
+
+//     // Check whether to run a primary, a worker, or an entire authority.
+//     match matches.subcommand() {
+//         // Spawn the primary and consensus core.
+//         ("primary", _) => {
+//             let (tx_new_certificates, rx_new_certificates) = channel(CHANNEL_CAPACITY);
+//             let (tx_feedback, rx_feedback) = channel(CHANNEL_CAPACITY);
+//             Primary::spawn(
+//                 keypair,
+//                 committee.clone(),
+//                 parameters.clone(),
+//                 store,
+//                 /* tx_consensus */ tx_new_certificates,
+//                 /* rx_consensus */ rx_feedback,
+//             );
+//             Consensus::spawn(
+//                 committee,
+//                 parameters.gc_depth,
+//                 /* rx_primary */ rx_new_certificates,
+//                 /* tx_primary */ tx_feedback,
+//                 tx_output,
+//             );
+//         }
+
+//         // Spawn a single worker.
+//         ("worker", Some(sub_matches)) => {
+//             let id = sub_matches
+//                 .value_of("id")
+//                 .unwrap()
+//                 .parse::<WorkerId>()
+//                 .context("The worker id must be a positive integer")?;
+//             Worker::spawn(keypair.name, id, committee, parameters, store);
+//         }
+//         _ => unreachable!(),
+//     }
+
+//     // Analyze the consensus' output.
+//     analyze(rx_output).await;
+
+//     // If this expression is reached, the program ends and all other tasks terminate.
+//     unreachable!();
+// }
+// Runs either a worker or a primary.
 async fn run(matches: &ArgMatches<'_>) -> Result<()> {
     let key_file = matches.value_of("keys").unwrap();
     let committee_file = matches.value_of("committee").unwrap();
@@ -88,8 +158,16 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
     // Make the data store.
     let store = Store::new(store_path).context("Failed to create a store")?;
 
-    // Channels the sequence of certificates.
-    let (tx_output, rx_output) = channel(CHANNEL_CAPACITY);
+    // ----------------------------------------------------------------------
+    // [MRV 修改点 1]：创建两段管道，而不是原来的一段
+    // 原代码：let (tx_output, rx_output) = channel(CHANNEL_CAPACITY);
+    // ----------------------------------------------------------------------
+    
+    // 管道 A：连接 Consensus -> MRV
+    let (tx_consensus_to_mrv, rx_consensus_to_mrv) = channel(CHANNEL_CAPACITY);
+    
+    // 管道 B：连接 MRV -> 外部 Client (即下面的 analyze 函数)
+    let (tx_mrv_to_client, rx_mrv_to_client) = channel(CHANNEL_CAPACITY);
 
     // Check whether to run a primary, a worker, or an entire authority.
     match matches.subcommand() {
@@ -105,12 +183,25 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
                 /* tx_consensus */ tx_new_certificates,
                 /* rx_consensus */ rx_feedback,
             );
+            
+            // ----------------------------------------------------------------------
+            // [MRV 修改点 2]：Consensus 的输出不再直接给 Client，而是给 MRV
+            // ----------------------------------------------------------------------
             Consensus::spawn(
                 committee,
                 parameters.gc_depth,
                 /* rx_primary */ rx_new_certificates,
                 /* tx_primary */ tx_feedback,
-                tx_output,
+                /* tx_output */ tx_consensus_to_mrv, // <--- 修改这里：输出给 MRV
+            );
+
+            // ----------------------------------------------------------------------
+            // [MRV 修改点 3]：启动 MRV 模块，作为中间处理层
+            // ----------------------------------------------------------------------
+            info!("🌟 节点启动：挂载 MRV Executor...");
+            MrvExecutor::spawn(
+                rx_consensus_to_mrv, // 输入：来自 Consensus
+                tx_mrv_to_client     // 输出：发往 Client
             );
         }
 
@@ -126,16 +217,70 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
         _ => unreachable!(),
     }
 
-    // Analyze the consensus' output.
-    analyze(rx_output).await;
+    // ----------------------------------------------------------------------
+    // [MRV 修改点 4]：Analyze (Client) 现在监听 MRV 的输出，而不是 Consensus 的
+    // ----------------------------------------------------------------------
+    analyze(rx_mrv_to_client).await;
 
     // If this expression is reached, the program ends and all other tasks terminate.
     unreachable!();
 }
 
+
+
 /// Receives an ordered list of certificates and apply any application-specific logic.
 async fn analyze(mut rx_output: Receiver<Certificate>) {
-    while let Some(_certificate) = rx_output.recv().await {
-        // NOTE: Here goes the application logic.
+    // while let Some(_certificate) = rx_output.recv().await {
+    //     // NOTE: Here goes the application logic.
+    // }
+
+
+    // info!("👀 MRV 监视器启动：正在等待 Consensus 产出区块...");
+
+    // let mut counter = 0;
+    // while let Some(certificate) = rx_output.recv().await {
+    //     counter += 1;
+    //     // 使用 info! 宏，这样日志会进入 primary-x.log 文件
+    //     info!("----------------------------------------------------");
+    //     info!("🔥 [MRV-Intercept] 收到第 {} 个已提交证书", counter);
+    //     info!("   🆔 Digest: {:?}", certificate.digest());
+    //     info!("   👤 Author: {:?}", certificate.origin());
+    //     info!("   🔄 Round:  {}", certificate.round());
+    //     info!("   👪 Parents: {}", certificate.header.parents.len());
+        
+    //     if !certificate.header.payload.is_empty() {
+    //         info!("   📦 Payload Batches: {} 个", certificate.header.payload.len());
+    //     }
+    //     info!("----------------------------------------------------");
+    // }
+
+    info!("👀 MRV 监视器 (Deep Dive 版) 启动...");
+
+    let mut counter = 0;
+    while let Some(certificate) = rx_output.recv().await {
+        counter += 1;
+        
+        let digest = certificate.digest();
+        let round = certificate.round();
+        let author = certificate.origin();
+        let parents = &certificate.header.parents; // 获取父节点集合引用
+
+        info!("----------------------------------------------------");
+        info!("🔥 [MRV-Intercept] #{} | Round: {} | Digest: {:?}", counter, round, digest);
+        info!("   👤 Author: {:?}", author);
+        
+        // --- 新增：详细打印每一个父节点 ---
+        info!("   🔗 Parents (引用了 {} 个上一轮节点):", parents.len());
+        for parent_digest in parents {
+            // 这里打印出来的就是 DAG 的“边”
+            // 你可以观察：Round N 的区块，其 Parent Digest 一定出现在 Round N-1 的日志里
+            info!("      -> Parent: {:?}", parent_digest);
+        }
+        // ------------------------------------
+
+        if !certificate.header.payload.is_empty() {
+            info!("   📦 Payload Batches: {} 个", certificate.header.payload.len());
+        }
+        info!("----------------------------------------------------");
     }
 }

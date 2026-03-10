@@ -22,6 +22,7 @@ crypto = { path = "../crypto" }
 primary = { path = "../primary" }
 worker = { path = "../worker" }
 consensus = { path = "../consensus" }
+mrv_executor = { path = "../mrv_executor" }
 
 [features]
 benchmark = ["worker/benchmark", "primary/benchmark", "consensus/benchmark"]

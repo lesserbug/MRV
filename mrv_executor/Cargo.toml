@@ -1,0 +1,17 @@
+[package]
+name = "mrv_executor"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# 异步运行时
+tokio = { version = "1.0", features = ["sync", "rt", "macros"] }
+# 日志工具
+log = "0.4"
+# 数据结构
+indexmap = "1.9" # 可选，但标准HashMap其实就够了，这里先用std
+
+# Narwhal 内部模块依赖
+primary = { path = "../primary" }
+crypto = { path = "../crypto" }
+consensus = { path = "../consensus" }
