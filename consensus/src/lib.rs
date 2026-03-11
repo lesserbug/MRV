@@ -199,8 +199,8 @@ impl Consensus {
 
                     #[cfg(feature = "benchmark")]
                     for digest in certificate.header.payload.keys() {
-                        // NOTE: This log entry is used to compute performance.
-                        info!("Committed {} -> {:?}", certificate.header, digest);
+                        // NOTE: This log entry is used to compute consensus commit performance.
+                        info!("Tusk_Committed {} -> {:?}", certificate.header, digest);
                     }
 
                     self.tx_primary

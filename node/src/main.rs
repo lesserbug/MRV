@@ -5,7 +5,6 @@ use config::Export as _;
 use config::Import as _;
 use config::{Committee, KeyPair, Parameters, WorkerId};
 use consensus::Consensus;
-use crypto::Hash as _;
 use env_logger::Env;
 use log::info;
 use mrv_executor::MrvExecutor;
@@ -152,19 +151,10 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
 
 /// Receives an ordered list of certificates and apply any application-specific logic.
 async fn analyze(mut rx_output: Receiver<Certificate>) {
-    info!("MRV output monitor started");
-
-    let mut counter = 0;
-    while let Some(certificate) = rx_output.recv().await {
-        counter += 1;
-        info!(
-            "MRV output #{} round={} author={:?} digest={:?} parents={} payload_batches={}",
-            counter,
-            certificate.round(),
-            certificate.origin(),
-            certificate.digest(),
-            certificate.header.parents.len(),
-            certificate.header.payload.len(),
-        );
+    while let Some(_certificate) = rx_output.recv().await {
+        #[cfg(feature = "benchmark")]
+        for digest in _certificate.header.payload.keys() {
+            info!("MRV_Committed {} -> {:?}", _certificate.header, digest);
+        }
     }
 }

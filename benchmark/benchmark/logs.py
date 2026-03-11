@@ -44,9 +44,10 @@ class LogParser:
                 results = p.map(self._parse_primaries, primaries)
         except (ValueError, IndexError, AttributeError) as e:
             raise ParseError(f'Failed to parse nodes\' logs: {e}')
-        proposals, commits, self.configs, primary_ips = zip(*results)
+        proposals, consensus_commits, execution_commits, self.configs, primary_ips = zip(*results)
         self.proposals = self._merge_results([x.items() for x in proposals])
-        self.commits = self._merge_results([x.items() for x in commits])
+        self.consensus_commits = self._merge_results([x.items() for x in consensus_commits])
+        self.execution_commits = self._merge_results([x.items() for x in execution_commits])
 
         # Parse the workers logs.
         try:
@@ -55,8 +56,9 @@ class LogParser:
         except (ValueError, IndexError, AttributeError) as e:
             raise ParseError(f'Failed to parse workers\' logs: {e}')
         sizes, self.received_samples, workers_ips = zip(*results)
+        committed = set(self.consensus_commits) | set(self.execution_commits)
         self.sizes = {
-            k: v for x in sizes for k, v in x.items() if k in self.commits
+            k: v for x in sizes for k, v in x.items() if k in committed
         }
 
         # Determine whether the primary and the workers are collocated.
@@ -102,9 +104,20 @@ class LogParser:
         tmp = [(d, self._to_posix(t)) for t, d in tmp]
         proposals = self._merge_results([tmp])
 
-        tmp = findall(r'\[(.*Z) .* Committed B\d+\([^ ]+\) -> ([^ ]+=)', log)
+        tmp = findall(r'\[(.*Z) .* Tusk_Committed B\d+\([^ ]+\) -> ([^ ]+=)', log)
         tmp = [(d, self._to_posix(t)) for t, d in tmp]
-        commits = self._merge_results([tmp])
+        consensus_commits = self._merge_results([tmp])
+
+        tmp = findall(r'\[(.*Z) .* MRV_Committed B\d+\([^ ]+\) -> ([^ ]+=)', log)
+        tmp = [(d, self._to_posix(t)) for t, d in tmp]
+        execution_commits = self._merge_results([tmp])
+
+        if not consensus_commits and not execution_commits:
+            tmp = findall(r'\[(.*Z) .* Committed B\d+\([^ ]+\) -> ([^ ]+=)', log)
+            tmp = [(d, self._to_posix(t)) for t, d in tmp]
+            legacy_commits = self._merge_results([tmp])
+            consensus_commits = legacy_commits
+            execution_commits = legacy_commits
 
         configs = {
             'header_size': int(
@@ -132,7 +145,7 @@ class LogParser:
 
         ip = search(r'booted on (\d+.\d+.\d+.\d+)', log).group(1)
         
-        return proposals, commits, configs, ip
+        return proposals, consensus_commits, execution_commits, configs, ip
 
     def _parse_workers(self, log):
         if search(r'(?:panic|Error)', log) is not None:
@@ -152,26 +165,29 @@ class LogParser:
         x = datetime.fromisoformat(string.replace('Z', '+00:00'))
         return datetime.timestamp(x)
 
+    def _committed_bytes(self, commits):
+        return sum(self.sizes[d] for d in commits if d in self.sizes)
+
     def _consensus_throughput(self):
-        if not self.commits:
+        if not self.consensus_commits:
             return 0, 0, 0
-        start, end = min(self.proposals.values()), max(self.commits.values())
+        start, end = min(self.proposals.values()), max(self.consensus_commits.values())
         duration = end - start
-        bytes = sum(self.sizes.values())
+        bytes = self._committed_bytes(self.consensus_commits)
         bps = bytes / duration
         tps = bps / self.size[0]
         return tps, bps, duration
 
     def _consensus_latency(self):
-        latency = [c - self.proposals[d] for d, c in self.commits.items()]
+        latency = [c - self.proposals[d] for d, c in self.consensus_commits.items()]
         return mean(latency) if latency else 0
 
     def _end_to_end_throughput(self):
-        if not self.commits:
+        if not self.execution_commits:
             return 0, 0, 0
-        start, end = min(self.start), max(self.commits.values())
+        start, end = min(self.start), max(self.execution_commits.values())
         duration = end - start
-        bytes = sum(self.sizes.values())
+        bytes = self._committed_bytes(self.execution_commits)
         bps = bytes / duration
         tps = bps / self.size[0]
         return tps, bps, duration
@@ -180,10 +196,10 @@ class LogParser:
         latency = []
         for sent, received in zip(self.sent_samples, self.received_samples):
             for tx_id, batch_id in received.items():
-                if batch_id in self.commits:
+                if batch_id in self.execution_commits:
                     assert tx_id in sent  # We receive txs that we sent.
                     start = sent[tx_id]
-                    end = self.commits[batch_id]
+                    end = self.execution_commits[batch_id]
                     latency += [end-start]
         return mean(latency) if latency else 0
 
