@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+use consensus::CommittedSubDag;
 use crypto::Hash as _;
 use crypto::PublicKey;
 use log::{debug, info, warn};
@@ -32,11 +33,10 @@ impl AufState {
 #[derive(Default)]
 struct BatchState {
     members: Vec<Digest>,
-    creators: HashSet<PublicKey>,
 }
 
 pub struct MrvExecutor {
-    rx_input: Receiver<Certificate>,
+    rx_input: Receiver<CommittedSubDag>,
     tx_output: Sender<Certificate>,
 
     // Full committed DAG metadata that MRV can query.
@@ -44,7 +44,7 @@ pub struct MrvExecutor {
 
     // Active AUFs and active batches that are not finalized yet.
     auf_states: HashMap<Digest, AufState>,
-    batches: BTreeMap<Round, BatchState>,
+    batches: BTreeMap<u64, BatchState>,
 
     frontier_round: Round,
 
@@ -56,7 +56,7 @@ pub struct MrvExecutor {
 
 impl MrvExecutor {
     pub fn spawn(
-        rx_input: Receiver<Certificate>,
+        rx_input: Receiver<CommittedSubDag>,
         tx_output: Sender<Certificate>,
         committee_size: usize,
         window_cap: Round,
@@ -89,55 +89,53 @@ impl MrvExecutor {
     }
 
     async fn run(&mut self) {
-        while let Some(certificate) = self.rx_input.recv().await {
-            if self.on_committed_certificate(certificate).await.is_err() {
+        while let Some(committed_batch) = self.rx_input.recv().await {
+            if self.on_committed_batch(committed_batch).await.is_err() {
                 warn!("MRV stopped because downstream receiver was dropped");
                 return;
             }
         }
     }
 
-    async fn on_committed_certificate(&mut self, certificate: Certificate) -> Result<(), ()> {
-        let digest = certificate.digest();
-        let round = certificate.round();
-        let author = certificate.origin();
+    async fn on_committed_batch(&mut self, committed_batch: CommittedSubDag) -> Result<(), ()> {
+        debug!(
+            "Processing committed batch index={} leader_round={} leader_digest={:?} size={}",
+            committed_batch.batch_index,
+            committed_batch.leader_round,
+            committed_batch.leader_digest,
+            committed_batch.certificates.len()
+        );
 
-        self.frontier_round = self.frontier_round.max(round);
-        self.store.insert(digest.clone(), certificate);
+        let mut members = Vec::new();
+        for certificate in committed_batch.certificates {
+            let digest = certificate.digest();
+            let round = certificate.round();
+            let author = certificate.origin();
 
-        // A canonical committed AUF per (round, creator).
-        let is_canonical = self.register_batch_member(round, author, digest.clone());
-        if is_canonical {
-            self.auf_states.insert(digest.clone(), AufState::new(round));
+            self.frontier_round = self.frontier_round.max(round);
+            self.store.insert(digest.clone(), certificate);
+            self.auf_states
+                .entry(digest.clone())
+                .or_insert_with(|| AufState::new(round));
             self.update_seen_for_new_certificate(round, author, &digest);
-        } else {
-            debug!(
-                "Ignored non-canonical certificate in MRV batch: round={}, author={}",
-                round, author
-            );
+            members.push(digest);
+        }
+
+        if !members.is_empty() {
+            self.batches
+                .insert(committed_batch.batch_index, BatchState { members });
         }
 
         self.apply_window_cap();
         self.try_finalize_batches().await
     }
-
-    fn register_batch_member(&mut self, round: Round, author: PublicKey, digest: Digest) -> bool {
-        let batch = self.batches.entry(round).or_default();
-        if batch.creators.insert(author) {
-            batch.members.push(digest);
-            true
-        } else {
-            false
-        }
-    }
-
     fn update_seen_for_new_certificate(
         &mut self,
         round: Round,
         author: PublicKey,
         digest: &Digest,
     ) {
-        let min_round = round.saturating_sub(self.window_cap);
+        let min_round = self.active_floor_round().unwrap_or(round);
         let ancestors = self.collect_ancestors_within_round_bound(digest, min_round);
 
         for anc in ancestors {
@@ -153,6 +151,9 @@ impl MrvExecutor {
         }
     }
 
+    fn active_floor_round(&self) -> Option<Round> {
+        self.auf_states.values().map(|state| state.round).min()
+    }
     fn collect_ancestors_within_round_bound(
         &self,
         start: &Digest,
@@ -244,8 +245,8 @@ impl MrvExecutor {
         Some(horizon)
     }
 
-    fn release_batch(&mut self, round: Round, members: &[Digest]) {
-        self.batches.remove(&round);
+    fn release_batch(&mut self, batch_index: u64, members: &[Digest]) {
+        self.batches.remove(&batch_index);
         for digest in members {
             self.auf_states.remove(digest);
         }

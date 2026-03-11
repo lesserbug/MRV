@@ -79,6 +79,20 @@ fn make_certificates(
     (certificates, next_parents)
 }
 
+async fn next_committed_certificate(
+    rx_output: &mut tokio::sync::mpsc::Receiver<CommittedSubDag>,
+    buffered: &mut VecDeque<Certificate>,
+) -> Certificate {
+    loop {
+        if let Some(certificate) = buffered.pop_front() {
+            return certificate;
+        }
+
+        let batch = rx_output.recv().await.unwrap();
+        buffered.extend(batch.certificates);
+    }
+}
+
 // Run for 4 dag rounds in ideal conditions (all nodes reference all other nodes). We should commit
 // the leader of round 2.
 #[tokio::test]
@@ -107,6 +121,7 @@ async fn commit_one() {
         tx_output,
     );
     tokio::spawn(async move { while rx_primary.recv().await.is_some() {} });
+    let mut committed = VecDeque::new();
 
     // Feed all certificates to the consensus. Only the last certificate should trigger
     // commits, so the task should not block.
@@ -117,10 +132,10 @@ async fn commit_one() {
     // Ensure the first 4 ordered certificates are from round 1 (they are the parents of the committed
     // leader); then the leader's certificate should be committed.
     for _ in 1..=4 {
-        let certificate = rx_output.recv().await.unwrap();
+        let certificate = next_committed_certificate(&mut rx_output, &mut committed).await;
         assert_eq!(certificate.round(), 1);
     }
-    let certificate = rx_output.recv().await.unwrap();
+    let certificate = next_committed_certificate(&mut rx_output, &mut committed).await;
     assert_eq!(certificate.round(), 2);
 }
 
@@ -152,6 +167,7 @@ async fn dead_node() {
         tx_output,
     );
     tokio::spawn(async move { while rx_primary.recv().await.is_some() {} });
+    let mut committed = VecDeque::new();
 
     // Feed all certificates to the consensus.
     tokio::spawn(async move {
@@ -162,11 +178,11 @@ async fn dead_node() {
 
     // We should commit 3 leaders (rounds 2, 4, and 6).
     for i in 1..=15 {
-        let certificate = rx_output.recv().await.unwrap();
+        let certificate = next_committed_certificate(&mut rx_output, &mut committed).await;
         let expected = ((i - 1) / keys.len() as u64) + 1;
         assert_eq!(certificate.round(), expected);
     }
-    let certificate = rx_output.recv().await.unwrap();
+    let certificate = next_committed_certificate(&mut rx_output, &mut committed).await;
     assert_eq!(certificate.round(), 6);
 }
 
@@ -240,6 +256,7 @@ async fn not_enough_support() {
         tx_output,
     );
     tokio::spawn(async move { while rx_primary.recv().await.is_some() {} });
+    let mut committed = VecDeque::new();
 
     // Feed all certificates to the consensus. Only the last certificate should trigger
     // commits, so the task should not block.
@@ -249,18 +266,18 @@ async fn not_enough_support() {
 
     // We should commit 2 leaders (rounds 2 and 4).
     for _ in 1..=3 {
-        let certificate = rx_output.recv().await.unwrap();
+        let certificate = next_committed_certificate(&mut rx_output, &mut committed).await;
         assert_eq!(certificate.round(), 1);
     }
     for _ in 1..=4 {
-        let certificate = rx_output.recv().await.unwrap();
+        let certificate = next_committed_certificate(&mut rx_output, &mut committed).await;
         assert_eq!(certificate.round(), 2);
     }
     for _ in 1..=3 {
-        let certificate = rx_output.recv().await.unwrap();
+        let certificate = next_committed_certificate(&mut rx_output, &mut committed).await;
         assert_eq!(certificate.round(), 3);
     }
-    let certificate = rx_output.recv().await.unwrap();
+    let certificate = next_committed_certificate(&mut rx_output, &mut committed).await;
     assert_eq!(certificate.round(), 4);
 }
 
@@ -303,6 +320,7 @@ async fn missing_leader() {
         tx_output,
     );
     tokio::spawn(async move { while rx_primary.recv().await.is_some() {} });
+    let mut committed = VecDeque::new();
 
     // Feed all certificates to the consensus. We should only commit upon receiving the last
     // certificate, so calls below should not block the task.
@@ -312,17 +330,17 @@ async fn missing_leader() {
 
     // Ensure the commit sequence is as expected.
     for _ in 1..=3 {
-        let certificate = rx_output.recv().await.unwrap();
+        let certificate = next_committed_certificate(&mut rx_output, &mut committed).await;
         assert_eq!(certificate.round(), 1);
     }
     for _ in 1..=3 {
-        let certificate = rx_output.recv().await.unwrap();
+        let certificate = next_committed_certificate(&mut rx_output, &mut committed).await;
         assert_eq!(certificate.round(), 2);
     }
     for _ in 1..=4 {
-        let certificate = rx_output.recv().await.unwrap();
+        let certificate = next_committed_certificate(&mut rx_output, &mut committed).await;
         assert_eq!(certificate.round(), 3);
     }
-    let certificate = rx_output.recv().await.unwrap();
+    let certificate = next_committed_certificate(&mut rx_output, &mut committed).await;
     assert_eq!(certificate.round(), 4);
 }

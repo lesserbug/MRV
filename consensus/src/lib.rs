@@ -12,6 +12,14 @@ use tokio::sync::mpsc::{Receiver, Sender};
 #[path = "tests/consensus_tests.rs"]
 pub mod consensus_tests;
 
+#[derive(Clone, Debug)]
+pub struct CommittedSubDag {
+    pub batch_index: u64,
+    pub leader_round: Round,
+    pub leader_digest: Digest,
+    pub certificates: Vec<Certificate>,
+}
+
 /// The representation of the DAG in memory.
 type Dag = HashMap<Round, HashMap<PublicKey, (Digest, Certificate)>>;
 
@@ -74,7 +82,7 @@ pub struct Consensus {
     /// Outputs the sequence of ordered certificates to the primary (for cleanup and feedback).
     tx_primary: Sender<Certificate>,
     /// Outputs the sequence of ordered certificates to the application layer.
-    tx_output: Sender<Certificate>,
+    tx_output: Sender<CommittedSubDag>,
 
     /// The genesis certificates.
     genesis: Vec<Certificate>,
@@ -86,7 +94,7 @@ impl Consensus {
         gc_depth: Round,
         rx_primary: Receiver<Certificate>,
         tx_primary: Sender<Certificate>,
-        tx_output: Sender<Certificate>,
+        tx_output: Sender<CommittedSubDag>,
     ) {
         tokio::spawn(async move {
             Self {
@@ -105,6 +113,7 @@ impl Consensus {
     async fn run(&mut self) {
         // The consensus state (everything else is immutable).
         let mut state = State::new(self.genesis.clone());
+        let mut next_batch_index = 0;
 
         // Listen to incoming certificates.
         while let Some(certificate) = self.rx_primary.recv().await {
@@ -158,43 +167,57 @@ impl Consensus {
 
             // Get an ordered list of past leaders that are linked to the current leader.
             debug!("Leader {:?} has enough support", leader);
-            let mut sequence = Vec::new();
             for leader in self.order_leaders(leader, &state).iter().rev() {
+                let mut batch = Vec::new();
+
                 // Starting from the oldest leader, flatten the sub-dag referenced by the leader.
                 for x in self.order_dag(leader, &state) {
                     // Update and clean up internal state.
                     state.update(&x, self.gc_depth);
 
-                    // Add the certificate to the sequence.
-                    sequence.push(x);
-                }
-            }
-
-            // Log the latest committed round of every authority (for debug).
-            if log_enabled!(log::Level::Debug) {
-                for (name, round) in &state.last_committed {
-                    debug!("Latest commit of {}: Round {}", name, round);
-                }
-            }
-
-            // Output the sequence in the right order.
-            for certificate in sequence {
-                #[cfg(not(feature = "benchmark"))]
-                info!("Committed {}", certificate.header);
-
-                #[cfg(feature = "benchmark")]
-                for digest in certificate.header.payload.keys() {
-                    // NOTE: This log entry is used to compute performance.
-                    info!("Committed {} -> {:?}", certificate.header, digest);
+                    // Add the certificate to the current committed batch.
+                    batch.push(x);
                 }
 
-                self.tx_primary
-                    .send(certificate.clone())
-                    .await
-                    .expect("Failed to send certificate to primary");
+                if batch.is_empty() {
+                    continue;
+                }
 
-                if let Err(e) = self.tx_output.send(certificate).await {
-                    warn!("Failed to output certificate: {}", e);
+                next_batch_index += 1;
+
+                // Log the latest committed round of every authority (for debug).
+                if log_enabled!(log::Level::Debug) {
+                    for (name, round) in &state.last_committed {
+                        debug!("Latest commit of {}: Round {}", name, round);
+                    }
+                }
+
+                // Output the sequence to the primary in the original certificate order.
+                for certificate in &batch {
+                    #[cfg(not(feature = "benchmark"))]
+                    info!("Committed {}", certificate.header);
+
+                    #[cfg(feature = "benchmark")]
+                    for digest in certificate.header.payload.keys() {
+                        // NOTE: This log entry is used to compute performance.
+                        info!("Committed {} -> {:?}", certificate.header, digest);
+                    }
+
+                    self.tx_primary
+                        .send(certificate.clone())
+                        .await
+                        .expect("Failed to send certificate to primary");
+                }
+
+                let committed_batch = CommittedSubDag {
+                    batch_index: next_batch_index,
+                    leader_round: leader.round(),
+                    leader_digest: leader.digest(),
+                    certificates: batch,
+                };
+
+                if let Err(e) = self.tx_output.send(committed_batch).await {
+                    warn!("Failed to output committed batch: {}", e);
                 }
             }
         }
