@@ -203,6 +203,14 @@ class LogParser:
                     latency += [end-start]
         return mean(latency) if latency else 0
 
+    def _mrv_post_commit_latency(self):
+        latency = [
+            self.execution_commits[d] - self.consensus_commits[d]
+            for d in self.execution_commits
+            if d in self.consensus_commits
+        ]
+        return mean(latency) if latency else 0
+
     def result(self):
         header_size = self.configs[0]['header_size']
         max_header_delay = self.configs[0]['max_header_delay']
@@ -216,6 +224,7 @@ class LogParser:
         consensus_tps, consensus_bps, _ = self._consensus_throughput()
         end_to_end_tps, end_to_end_bps, duration = self._end_to_end_throughput()
         end_to_end_latency = self._end_to_end_latency() * 1_000
+        mrv_post_commit_latency = self._mrv_post_commit_latency() * 1_000
 
         return (
             '\n'
@@ -247,6 +256,7 @@ class LogParser:
             f' End-to-end TPS: {round(end_to_end_tps):,} tx/s\n'
             f' End-to-end BPS: {round(end_to_end_bps):,} B/s\n'
             f' End-to-end latency: {round(end_to_end_latency):,} ms\n'
+            f' MRV post-commit latency: {round(mrv_post_commit_latency):,} ms\n'
             '-----------------------------------------\n'
         )
 
@@ -273,3 +283,4 @@ class LogParser:
                 workers += [f.read()]
 
         return cls(clients, primaries, workers, faults=faults)
+

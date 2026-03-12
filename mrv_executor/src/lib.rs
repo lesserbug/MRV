@@ -45,6 +45,7 @@ pub struct MrvExecutor {
     // Active AUFs and active batches that are not finalized yet.
     auf_states: HashMap<Digest, AufState>,
     batches: BTreeMap<u64, BatchState>,
+    active_floor_round: Option<Round>,
 
     frontier_round: Round,
 
@@ -79,6 +80,7 @@ impl MrvExecutor {
                 store: HashMap::new(),
                 auf_states: HashMap::new(),
                 batches: BTreeMap::new(),
+                active_floor_round: None,
                 frontier_round: 0,
                 window_cap,
                 reach_threshold,
@@ -114,9 +116,10 @@ impl MrvExecutor {
 
             self.frontier_round = self.frontier_round.max(round);
             self.store.insert(digest.clone(), certificate);
-            self.auf_states
-                .entry(digest.clone())
-                .or_insert_with(|| AufState::new(round));
+            if !self.auf_states.contains_key(&digest) {
+                self.note_active_round(round);
+                self.auf_states.insert(digest.clone(), AufState::new(round));
+            }
             self.update_seen_for_new_certificate(round, author, &digest);
             members.push(digest);
         }
@@ -135,32 +138,8 @@ impl MrvExecutor {
         author: PublicKey,
         digest: &Digest,
     ) {
-        let min_round = self.active_floor_round().unwrap_or(round);
-        let ancestors = self.collect_ancestors_within_round_bound(digest, min_round);
-
-        for anc in ancestors {
-            if let Some(state) = self.auf_states.get_mut(&anc) {
-                let seen = state.seen_by_round.entry(round).or_default();
-                seen.insert(author);
-
-                if state.horizon.is_none() && seen.len() >= self.reach_threshold {
-                    state.horizon = Some(round);
-                    state.mature = true;
-                }
-            }
-        }
-    }
-
-    fn active_floor_round(&self) -> Option<Round> {
-        self.auf_states.values().map(|state| state.round).min()
-    }
-    fn collect_ancestors_within_round_bound(
-        &self,
-        start: &Digest,
-        min_round: Round,
-    ) -> Vec<Digest> {
-        let mut ancestors = Vec::new();
-        let mut stack = vec![start.clone()];
+        let min_round = self.active_floor_round.unwrap_or(round);
+        let mut stack = vec![digest.clone()];
         let mut visited = HashSet::new();
 
         while let Some(current) = stack.pop() {
@@ -168,22 +147,47 @@ impl MrvExecutor {
                 continue;
             }
 
-            let certificate = match self.store.get(&current) {
-                Some(c) => c,
+            let current_round = match self.store.get(&current) {
+                Some(certificate) => certificate.round(),
                 None => continue,
             };
 
-            if certificate.round() < min_round {
+            if current_round < min_round {
                 continue;
             }
 
-            ancestors.push(current.clone());
-            for parent in &certificate.header.parents {
-                stack.push(parent.clone());
+            if let Some(state) = self.auf_states.get_mut(&current) {
+                let seen = state.seen_by_round.entry(round).or_default();
+                if seen.insert(author)
+                    && state.horizon.is_none()
+                    && seen.len() >= self.reach_threshold
+                {
+                    state.horizon = Some(round);
+                    state.mature = true;
+                }
+            }
+
+            if current_round == min_round {
+                continue;
+            }
+
+            if let Some(certificate) = self.store.get(&current) {
+                for parent in &certificate.header.parents {
+                    stack.push(parent.clone());
+                }
             }
         }
+    }
 
-        ancestors
+    fn note_active_round(&mut self, round: Round) {
+        self.active_floor_round = Some(
+            self.active_floor_round
+                .map_or(round, |current_min| current_min.min(round)),
+        );
+    }
+
+    fn recompute_active_floor_round(&mut self) {
+        self.active_floor_round = self.auf_states.values().map(|state| state.round).min();
     }
 
     fn apply_window_cap(&mut self) {
@@ -247,8 +251,19 @@ impl MrvExecutor {
 
     fn release_batch(&mut self, batch_index: u64, members: &[Digest]) {
         self.batches.remove(&batch_index);
+        let mut removed_floor = false;
         for digest in members {
+            if self
+                .auf_states
+                .get(digest)
+                .map_or(false, |state| Some(state.round) == self.active_floor_round)
+            {
+                removed_floor = true;
+            }
             self.auf_states.remove(digest);
+        }
+        if removed_floor {
+            self.recompute_active_floor_round();
         }
     }
 
