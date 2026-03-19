@@ -2,7 +2,7 @@
 use anyhow::{Context, Result};
 use bytes::BufMut as _;
 use bytes::BytesMut;
-use clap::{crate_name, crate_version, App, AppSettings};
+use clap::{crate_name, crate_version, App, AppSettings, ArgMatches};
 use env_logger::Env;
 use futures::future::join_all;
 use futures::sink::SinkExt as _;
@@ -21,6 +21,9 @@ async fn main() -> Result<()> {
         .args_from_usage("<ADDR> 'The network address of the node where to send txs'")
         .args_from_usage("--size=<INT> 'The size of each transaction in bytes'")
         .args_from_usage("--rate=<INT> 'The rate (txs/s) at which to send the transactions'")
+        .args_from_usage("--workload=[MODE] 'steady or waves workload pattern'")
+        .args_from_usage("--wave-burst-ms=[INT] 'The burst duration in ms for waves workload'")
+        .args_from_usage("--wave-gap-ms=[INT] 'The silent gap duration in ms for waves workload'")
         .args_from_usage("--nodes=[ADDR]... 'Network addresses that must be reachable before starting the benchmark.'")
         .setting(AppSettings::ArgRequiredElseHelp)
         .get_matches();
@@ -44,6 +47,7 @@ async fn main() -> Result<()> {
         .unwrap()
         .parse::<u64>()
         .context("The rate of transactions must be a non-negative integer")?;
+    let workload = Workload::from_matches(&matches)?;
     let nodes = matches
         .values_of("nodes")
         .unwrap_or_default()
@@ -64,6 +68,7 @@ async fn main() -> Result<()> {
         target,
         size,
         rate,
+        workload,
         nodes,
     };
 
@@ -78,7 +83,77 @@ struct Client {
     target: SocketAddr,
     size: usize,
     rate: u64,
+    workload: Workload,
     nodes: Vec<SocketAddr>,
+}
+
+#[derive(Clone, Copy)]
+enum Workload {
+    Steady,
+    Waves { burst_ms: u64, gap_ms: u64 },
+}
+
+impl Workload {
+    const SAMPLE_COUNTER_MASK: u64 = (1u64 << 48) - 1;
+
+    fn from_matches(matches: &ArgMatches<'_>) -> Result<Self> {
+        match matches.value_of("workload").unwrap_or("steady") {
+            "steady" => Ok(Self::Steady),
+            "waves" => {
+                let burst_ms = matches
+                    .value_of("wave-burst-ms")
+                    .unwrap_or("300")
+                    .parse::<u64>()
+                    .context("The wave burst duration must be a non-negative integer")?;
+                let gap_ms = matches
+                    .value_of("wave-gap-ms")
+                    .unwrap_or("1200")
+                    .parse::<u64>()
+                    .context("The wave gap duration must be a non-negative integer")?;
+
+                if burst_ms == 0 || gap_ms == 0 {
+                    return Err(anyhow::Error::msg(
+                        "Waves workload requires both burst and gap durations to be positive",
+                    ));
+                }
+
+                Ok(Self::Waves { burst_ms, gap_ms })
+            }
+            other => Err(anyhow::Error::msg(format!(
+                "Unsupported workload mode '{}': expected 'steady' or 'waves'",
+                other
+            ))),
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Steady => "steady",
+            Self::Waves { .. } => "waves",
+        }
+    }
+
+    fn is_active(&self, benchmark_start: Instant) -> bool {
+        match self {
+            Self::Steady => true,
+            Self::Waves { burst_ms, gap_ms } => {
+                let cycle_ms = *burst_ms + *gap_ms;
+                (benchmark_start.elapsed().as_millis() as u64) % cycle_ms < *burst_ms
+            }
+        }
+    }
+
+    fn make_sample_id(&self, benchmark_start: Instant, sample_counter: u64) -> u64 {
+        let wave_id = match self {
+            Self::Steady => 0,
+            Self::Waves { burst_ms, gap_ms } => {
+                let cycle_ms = *burst_ms + *gap_ms;
+                ((benchmark_start.elapsed().as_millis() as u64) / cycle_ms) as u64
+            }
+        };
+
+        (wave_id << 48) | (sample_counter & Self::SAMPLE_COUNTER_MASK)
+    }
 }
 
 impl Client {
@@ -100,27 +175,47 @@ impl Client {
 
         // Submit all transactions.
         let burst = self.rate / PRECISION;
+        if burst == 0 {
+            return Err(anyhow::Error::msg(
+                "Transaction rate must be at least 20 tx/s",
+            ));
+        }
         let mut tx = BytesMut::with_capacity(self.size);
-        let mut counter = 0;
+        let mut sample_counter = 0;
         let mut r = rand::thread_rng().gen();
         let mut transport = Framed::new(stream, LengthDelimitedCodec::new());
         let interval = interval(Duration::from_millis(BURST_DURATION));
         tokio::pin!(interval);
 
+        info!("Workload: {}", self.workload.name());
+        if let Workload::Waves { burst_ms, gap_ms } = self.workload {
+            info!("Wave burst: {} ms", burst_ms);
+            info!("Wave gap: {} ms", gap_ms);
+        }
+
         // NOTE: This log entry is used to compute performance.
         info!("Start sending transactions");
+        let benchmark_start = Instant::now();
 
         'main: loop {
             interval.as_mut().tick().await;
             let now = Instant::now();
 
+            if !self.workload.is_active(benchmark_start) {
+                continue;
+            }
+
             for x in 0..burst {
-                if x == counter % burst {
+                if x == sample_counter % burst {
+                    let tx_id = self
+                        .workload
+                        .make_sample_id(benchmark_start, sample_counter);
+
                     // NOTE: This log entry is used to compute performance.
-                    info!("Sending sample transaction {}", counter);
+                    info!("Sending sample transaction {}", tx_id);
 
                     tx.put_u8(0u8); // Sample txs start with 0.
-                    tx.put_u64(counter); // This counter identifies the tx.
+                    tx.put_u64(tx_id); // This counter identifies the tx.
                 } else {
                     r += 1;
                     tx.put_u8(1u8); // Standard txs start with 1.
@@ -138,7 +233,7 @@ impl Client {
                 // NOTE: This log entry is used to compute performance.
                 warn!("Transaction rate too high for this client");
             }
-            counter += 1;
+            sample_counter += 1;
         }
         Ok(())
     }

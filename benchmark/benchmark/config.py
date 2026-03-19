@@ -212,6 +212,17 @@ class BenchParameters:
                 self.collocate = True
 
             self.tx_size = int(json['tx_size'])
+
+            self.workload = str(json['workload']) if 'workload' in json else 'steady'
+            if self.workload not in ('steady', 'waves'):
+                raise ConfigError('Unsupported workload type')
+
+            self.wave_burst_ms = int(
+                json['wave_burst_ms']
+            ) if 'wave_burst_ms' in json else 300
+            self.wave_gap_ms = int(
+                json['wave_gap_ms']
+            ) if 'wave_gap_ms' in json else 1_200
            
             self.duration = int(json['duration'])
 
@@ -224,6 +235,8 @@ class BenchParameters:
 
         if min(self.nodes) <= self.faults:
             raise ConfigError('There should be more nodes than faults')
+        if self.wave_burst_ms <= 0 or self.wave_gap_ms <= 0:
+            raise ConfigError('Wave burst and gap must be positive')
 
 
 class PlotParameters:

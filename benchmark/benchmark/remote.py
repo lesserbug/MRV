@@ -230,7 +230,10 @@ class Bench:
                     address,
                     bench_parameters.tx_size,
                     rate_share,
-                    [x for y in workers_addresses for _, x in y]
+                    [x for y in workers_addresses for _, x in y],
+                    workload=bench_parameters.workload,
+                    wave_burst_ms=bench_parameters.wave_burst_ms,
+                    wave_gap_ms=bench_parameters.wave_gap_ms,
                 )
                 log_file = PathMaker.client_log_file(i, id)
                 self._background_run(host, cmd, log_file)

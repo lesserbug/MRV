@@ -46,14 +46,24 @@ class CommandMaker:
                 f'--store {store} --parameters {parameters} worker --id {id}')
 
     @staticmethod
-    def run_client(address, size, rate, nodes):
+    def run_client(address, size, rate, nodes, workload='steady', wave_burst_ms=300, wave_gap_ms=1200):
         assert isinstance(address, str)
         assert isinstance(size, int) and size > 0
         assert isinstance(rate, int) and rate >= 0
         assert isinstance(nodes, list)
         assert all(isinstance(x, str) for x in nodes)
+        assert workload in ('steady', 'waves')
+        assert isinstance(wave_burst_ms, int) and wave_burst_ms > 0
+        assert isinstance(wave_gap_ms, int) and wave_gap_ms > 0
         nodes = f'--nodes {" ".join(nodes)}' if nodes else ''
-        return f'./benchmark_client {address} --size {size} --rate {rate} {nodes}'
+        workload_args = ''
+        if workload == 'waves':
+            workload_args = (
+                f' --workload {workload}'
+                f' --wave-burst-ms {wave_burst_ms}'
+                f' --wave-gap-ms {wave_gap_ms}'
+            )
+        return f'./benchmark_client {address} --size {size} --rate {rate}{workload_args} {nodes}'
 
     @staticmethod
     def kill():

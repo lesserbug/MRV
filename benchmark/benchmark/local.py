@@ -89,6 +89,9 @@ class LocalBench:
                         self.tx_size,
                         rate_share,
                         [x for y in workers_addresses for _, x in y],
+                        workload=self.workload,
+                        wave_burst_ms=self.wave_burst_ms,
+                        wave_gap_ms=self.wave_gap_ms,
                     )
                     log_file = PathMaker.client_log_file(i, id)
                     self._background_run(cmd, log_file)

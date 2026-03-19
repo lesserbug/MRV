@@ -153,6 +153,9 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
 async fn analyze(mut rx_output: Receiver<Certificate>) {
     while let Some(_certificate) = rx_output.recv().await {
         #[cfg(feature = "benchmark")]
+        info!("MRV_AUF_Committed {}", _certificate.header);
+
+        #[cfg(feature = "benchmark")]
         for digest in _certificate.header.payload.keys() {
             info!("MRV_Committed {} -> {:?}", _certificate.header, digest);
         }

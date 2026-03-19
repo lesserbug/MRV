@@ -38,6 +38,89 @@ struct BatchState {
     members: Vec<Digest>,
 }
 
+#[cfg_attr(not(feature = "benchmark"), allow(dead_code))]
+#[derive(Default)]
+struct BatchStats {
+    batch_size: usize,
+    matured_aufs: usize,
+    total_pairs: usize,
+    matured_pairs: usize,
+    trunc_pairs: usize,
+    conflict_pairs: usize,
+    no_signal_pairs: usize,
+    edges: usize,
+    fair_pairs: usize,
+    implied_pairs: usize,
+    tie_pairs: usize,
+    nontrivial_scc_nodes: usize,
+    max_scc_size: usize,
+    scc_sizes: Vec<usize>,
+}
+
+impl BatchStats {
+    fn from_members(executor: &MrvExecutor, members: &[Digest]) -> Self {
+        let batch_size = members.len();
+        let matured_aufs = members
+            .iter()
+            .filter(|digest| {
+                executor
+                    .auf_states
+                    .get(*digest)
+                    .map_or(false, |state| state.mature)
+            })
+            .count();
+        let total_pairs = batch_size.saturating_sub(1) * batch_size / 2;
+
+        Self {
+            batch_size,
+            matured_aufs,
+            total_pairs,
+            max_scc_size: batch_size.min(1),
+            scc_sizes: if batch_size == 0 {
+                Vec::new()
+            } else {
+                vec![batch_size]
+            },
+            ..Self::default()
+        }
+    }
+
+    #[cfg(feature = "benchmark")]
+    fn log(&self, batch_index: u64) {
+        let scc_sizes = self
+            .scc_sizes
+            .iter()
+            .map(|size| size.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+
+        info!(
+            "MRV_BatchStats batch={} size={} matured_aufs={} total_pairs={} matured_pairs={} trunc_pairs={} conflict_pairs={} no_signal_pairs={} edges={} fair_pairs={} implied_pairs={} tie_pairs={} nontrivial_scc_nodes={} max_scc={} scc_sizes=[{}]",
+            batch_index,
+            self.batch_size,
+            self.matured_aufs,
+            self.total_pairs,
+            self.matured_pairs,
+            self.trunc_pairs,
+            self.conflict_pairs,
+            self.no_signal_pairs,
+            self.edges,
+            self.fair_pairs,
+            self.implied_pairs,
+            self.tie_pairs,
+            self.nontrivial_scc_nodes,
+            self.max_scc_size,
+            scc_sizes,
+        );
+    }
+}
+
+struct BatchOrdering {
+    order: Vec<Digest>,
+    #[cfg_attr(not(feature = "benchmark"), allow(dead_code))]
+    stats: BatchStats,
+}
+
 pub struct MrvExecutor {
     rx_input: Receiver<CommittedSubDag>,
     tx_output: Sender<Certificate>,
@@ -209,15 +292,15 @@ impl MrvExecutor {
 
     async fn try_finalize_batches(&mut self) -> Result<(), ()> {
         loop {
-            let next_round = match self.batches.keys().next().copied() {
-                Some(r) => r,
+            let batch_index = match self.batches.keys().next().copied() {
+                Some(index) => index,
                 None => return Ok(()),
             };
 
-            let members = match self.batches.get(&next_round) {
+            let members = match self.batches.get(&batch_index) {
                 Some(batch) if !batch.members.is_empty() => batch.members.clone(),
                 Some(_) => {
-                    self.batches.remove(&next_round);
+                    self.batches.remove(&batch_index);
                     continue;
                 }
                 None => continue,
@@ -232,14 +315,17 @@ impl MrvExecutor {
                 return Ok(());
             }
 
-            let sorted = self.sort_batch(&members);
-            for digest in sorted {
+            let ordering = self.sort_batch(&members);
+            #[cfg(feature = "benchmark")]
+            ordering.stats.log(batch_index);
+
+            for digest in ordering.order {
                 if let Some(certificate) = self.store.get(&digest).cloned() {
                     self.tx_output.send(certificate).await.map_err(|_| ())?;
                 }
             }
 
-            self.release_batch(next_round, &members);
+            self.release_batch(batch_index, &members);
         }
     }
 
@@ -274,9 +360,13 @@ impl MrvExecutor {
     // MRV ordering in one batch: frozen pair verdicts -> SCC -> topo -> tie-break
     // ---------------------------------------------------------------------
 
-    fn sort_batch(&self, members: &[Digest]) -> Vec<Digest> {
+    fn sort_batch(&self, members: &[Digest]) -> BatchOrdering {
+        let mut stats = BatchStats::from_members(self, members);
         if members.len() <= 1 {
-            return members.to_vec();
+            return BatchOrdering {
+                order: members.to_vec(),
+                stats,
+            };
         }
 
         let mut nodes = members.to_vec();
@@ -290,18 +380,40 @@ impl MrvExecutor {
                 let a = &nodes[i];
                 let b = &nodes[j];
                 match self.compare_pair(a, b) {
-                    OrderingRelation::ABetter => {
+                    PairRelation::ABetter => {
+                        stats.matured_pairs += 1;
+                        stats.edges += 1;
                         graph.get_mut(a).expect("node must exist").insert(b.clone());
                     }
-                    OrderingRelation::BBetter => {
+                    PairRelation::BBetter => {
+                        stats.matured_pairs += 1;
+                        stats.edges += 1;
                         graph.get_mut(b).expect("node must exist").insert(a.clone());
                     }
-                    OrderingRelation::Tie => {}
+                    PairRelation::Truncated => {
+                        stats.trunc_pairs += 1;
+                    }
+                    PairRelation::Conflict => {
+                        stats.matured_pairs += 1;
+                        stats.conflict_pairs += 1;
+                    }
+                    PairRelation::NoSignal => {
+                        stats.matured_pairs += 1;
+                        stats.no_signal_pairs += 1;
+                    }
                 }
             }
         }
 
         let components = self.find_scc(&nodes, &graph);
+        stats.scc_sizes = components.iter().map(Vec::len).collect();
+        stats.scc_sizes.sort_unstable_by(|a, b| b.cmp(a));
+        stats.max_scc_size = stats.scc_sizes.iter().copied().max().unwrap_or(0);
+        stats.nontrivial_scc_nodes = components
+            .iter()
+            .filter(|component| component.len() > 1)
+            .map(Vec::len)
+            .sum();
 
         let mut node_to_component = HashMap::new();
         for (component_idx, component) in components.iter().enumerate() {
@@ -331,6 +443,22 @@ impl MrvExecutor {
                 }
             }
         }
+
+        let direct_cross_component_pairs: usize = graph
+            .iter()
+            .map(|(from, tos)| {
+                let from_component = node_to_component[from];
+                tos.iter()
+                    .filter(|to| node_to_component[*to] != from_component)
+                    .count()
+            })
+            .sum();
+
+        stats.fair_pairs = self.count_fair_pairs(&components, &component_graph);
+        stats.implied_pairs = stats
+            .fair_pairs
+            .saturating_sub(direct_cross_component_pairs);
+        stats.tie_pairs = stats.total_pairs.saturating_sub(stats.fair_pairs);
 
         let mut ready: Vec<usize> = component_indegree
             .iter()
@@ -364,22 +492,25 @@ impl MrvExecutor {
             }
         }
 
-        result
+        BatchOrdering {
+            order: result,
+            stats,
+        }
     }
 
-    fn compare_pair(&self, a: &Digest, b: &Digest) -> OrderingRelation {
+    fn compare_pair(&self, a: &Digest, b: &Digest) -> PairRelation {
         let state_a = match self.auf_states.get(a) {
             Some(x) => x,
-            None => return OrderingRelation::Tie,
+            None => return PairRelation::NoSignal,
         };
         let state_b = match self.auf_states.get(b) {
             Some(x) => x,
-            None => return OrderingRelation::Tie,
+            None => return PairRelation::NoSignal,
         };
 
         // Capped-but-not-mature AUFs never produce a positive fairness edge.
         if !state_a.mature || !state_b.mature {
-            return OrderingRelation::Tie;
+            return PairRelation::Truncated;
         }
 
         let horizon_a = state_a.horizon.expect("horizon must be finalized");
@@ -388,7 +519,7 @@ impl MrvExecutor {
 
         let coexistence_start = state_a.round.max(state_b.round);
         if pair_horizon <= coexistence_start {
-            return OrderingRelation::Tie;
+            return PairRelation::NoSignal;
         }
 
         let mut pos = 0;
@@ -407,12 +538,53 @@ impl MrvExecutor {
         }
 
         if pos >= 1 && neg == 0 {
-            OrderingRelation::ABetter
+            PairRelation::ABetter
         } else if neg >= 1 && pos == 0 {
-            OrderingRelation::BBetter
+            PairRelation::BBetter
+        } else if pos >= 1 || neg >= 1 {
+            PairRelation::Conflict
         } else {
-            OrderingRelation::Tie
+            PairRelation::NoSignal
         }
+    }
+
+    fn count_fair_pairs(
+        &self,
+        components: &[Vec<Digest>],
+        component_graph: &HashMap<usize, HashSet<usize>>,
+    ) -> usize {
+        let mut reachability = Vec::with_capacity(components.len());
+
+        for start in 0..components.len() {
+            let mut visited = HashSet::new();
+            let mut stack: Vec<usize> = component_graph
+                .get(&start)
+                .into_iter()
+                .flat_map(|neighbors| neighbors.iter().copied())
+                .collect();
+
+            while let Some(current) = stack.pop() {
+                if !visited.insert(current) {
+                    continue;
+                }
+
+                if let Some(neighbors) = component_graph.get(&current) {
+                    stack.extend(neighbors.iter().copied());
+                }
+            }
+
+            reachability.push(visited);
+        }
+
+        let mut fair_pairs = 0;
+        for i in 0..components.len() {
+            for j in (i + 1)..components.len() {
+                if reachability[i].contains(&j) || reachability[j].contains(&i) {
+                    fair_pairs += components[i].len() * components[j].len();
+                }
+            }
+        }
+        fair_pairs
     }
 
     fn seen_count_at(&self, digest: &Digest, round: Round) -> usize {
@@ -532,8 +704,10 @@ impl MrvExecutor {
     }
 }
 
-enum OrderingRelation {
+enum PairRelation {
     ABetter,
     BBetter,
-    Tie,
+    Truncated,
+    Conflict,
+    NoSignal,
 }

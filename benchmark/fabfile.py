@@ -10,7 +10,7 @@ from benchmark.remote import Bench, BenchError
 
 
 @task
-def local(ctx, debug=True):
+def local(ctx, debug=True, workload='steady', wave_burst_ms=300, wave_gap_ms=1200):
     ''' Run benchmarks on localhost '''
     bench_params = {
         'faults': 0,
@@ -18,6 +18,9 @@ def local(ctx, debug=True):
         'workers': 1,
         'rate': 50_000,
         'tx_size': 512,
+        'workload': workload,
+        'wave_burst_ms': int(wave_burst_ms),
+        'wave_gap_ms': int(wave_gap_ms),
         'duration': 20,
     }
     node_params = {
@@ -91,7 +94,7 @@ def install(ctx):
 
 
 @task
-def remote(ctx, debug=False):
+def remote(ctx, debug=False, workload='steady', wave_burst_ms=300, wave_gap_ms=1200):
     ''' Run benchmarks on AWS '''
     bench_params = {
         'faults': 3,
@@ -100,6 +103,9 @@ def remote(ctx, debug=False):
         'collocate': True,
         'rate': [10_000, 110_000],
         'tx_size': 512,
+        'workload': workload,
+        'wave_burst_ms': int(wave_burst_ms),
+        'wave_gap_ms': int(wave_gap_ms),
         'duration': 300,
         'runs': 2,
     }
