@@ -10,13 +10,31 @@ from benchmark.remote import Bench, BenchError
 
 
 @task
-def local(ctx, debug=True, workload='steady', wave_burst_ms=300, wave_gap_ms=1200):
+def local(
+    ctx,
+    debug=True,
+    nodes=5,
+    workers=1,
+    faults=0,
+    rate='auto',
+    per_worker_rate=12_500,
+    workload='steady',
+    wave_burst_ms=300,
+    wave_gap_ms=1200,
+):
     ''' Run benchmarks on localhost '''
+    nodes = int(nodes)
+    workers = int(workers)
+    faults = int(faults)
+    per_worker_rate = int(per_worker_rate)
+    total_workers = nodes * workers
+    rate = total_workers * per_worker_rate if str(rate) == 'auto' else int(rate)
+
     bench_params = {
-        'faults': 0,
-        'nodes': 4,
-        'workers': 1,
-        'rate': 50_000,
+        'faults': faults,
+        'nodes': nodes,
+        'workers': workers,
+        'rate': rate,
         'tx_size': 512,
         'workload': workload,
         'wave_burst_ms': int(wave_burst_ms),

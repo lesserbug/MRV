@@ -121,6 +121,11 @@ struct BatchOrdering {
     stats: BatchStats,
 }
 
+struct PairComparison {
+    relation: PairRelation,
+    max_abs_delta: Option<i64>,
+}
+
 pub struct MrvExecutor {
     rx_input: Receiver<CommittedSubDag>,
     tx_output: Sender<Certificate>,
@@ -315,7 +320,7 @@ impl MrvExecutor {
                 return Ok(());
             }
 
-            let ordering = self.sort_batch(&members);
+            let ordering = self.sort_batch(batch_index, &members);
             #[cfg(feature = "benchmark")]
             ordering.stats.log(batch_index);
 
@@ -360,7 +365,7 @@ impl MrvExecutor {
     // MRV ordering in one batch: frozen pair verdicts -> SCC -> topo -> tie-break
     // ---------------------------------------------------------------------
 
-    fn sort_batch(&self, members: &[Digest]) -> BatchOrdering {
+    fn sort_batch(&self, batch_index: u64, members: &[Digest]) -> BatchOrdering {
         let mut stats = BatchStats::from_members(self, members);
         if members.len() <= 1 {
             return BatchOrdering {
@@ -379,7 +384,11 @@ impl MrvExecutor {
             for j in (i + 1)..nodes.len() {
                 let a = &nodes[i];
                 let b = &nodes[j];
-                match self.compare_pair(a, b) {
+                let comparison = self.compare_pair(a, b);
+                #[cfg(feature = "benchmark")]
+                self.log_pair_stats(batch_index, a, b, &comparison);
+
+                match comparison.relation {
                     PairRelation::ABetter => {
                         stats.matured_pairs += 1;
                         stats.edges += 1;
@@ -498,19 +507,54 @@ impl MrvExecutor {
         }
     }
 
-    fn compare_pair(&self, a: &Digest, b: &Digest) -> PairRelation {
+    #[cfg(feature = "benchmark")]
+    fn log_pair_stats(
+        &self,
+        batch_index: u64,
+        a: &Digest,
+        b: &Digest,
+        comparison: &PairComparison,
+    ) {
+        let max_abs_delta = comparison
+            .max_abs_delta
+            .map_or_else(|| "na".to_string(), |value| value.to_string());
+
+        info!(
+            "MRV_PairStats batch={} a={:?} b={:?} outcome={} max_abs_delta={}",
+            batch_index,
+            a,
+            b,
+            comparison.relation.as_str(),
+            max_abs_delta,
+        );
+    }
+
+    fn compare_pair(&self, a: &Digest, b: &Digest) -> PairComparison {
         let state_a = match self.auf_states.get(a) {
             Some(x) => x,
-            None => return PairRelation::NoSignal,
+            None => {
+                return PairComparison {
+                    relation: PairRelation::NoSignal,
+                    max_abs_delta: None,
+                }
+            }
         };
         let state_b = match self.auf_states.get(b) {
             Some(x) => x,
-            None => return PairRelation::NoSignal,
+            None => {
+                return PairComparison {
+                    relation: PairRelation::NoSignal,
+                    max_abs_delta: None,
+                }
+            }
         };
 
         // Capped-but-not-mature AUFs never produce a positive fairness edge.
         if !state_a.mature || !state_b.mature {
-            return PairRelation::Truncated;
+            return PairComparison {
+                relation: PairRelation::Truncated,
+                max_abs_delta: None,
+            };
         }
 
         let horizon_a = state_a.horizon.expect("horizon must be finalized");
@@ -519,16 +563,21 @@ impl MrvExecutor {
 
         let coexistence_start = state_a.round.max(state_b.round);
         if pair_horizon <= coexistence_start {
-            return PairRelation::NoSignal;
+            return PairComparison {
+                relation: PairRelation::NoSignal,
+                max_abs_delta: Some(0),
+            };
         }
 
         let mut pos = 0;
         let mut neg = 0;
+        let mut max_abs_delta = 0;
 
         for round in (coexistence_start + 1)..=pair_horizon {
             let seen_a = self.seen_count_at(a, round) as i64;
             let seen_b = self.seen_count_at(b, round) as i64;
             let diff = seen_a - seen_b;
+            max_abs_delta = max_abs_delta.max(diff.abs());
 
             if diff >= self.delta_threshold {
                 pos += 1;
@@ -537,7 +586,7 @@ impl MrvExecutor {
             }
         }
 
-        if pos >= 1 && neg == 0 {
+        let relation = if pos >= 1 && neg == 0 {
             PairRelation::ABetter
         } else if neg >= 1 && pos == 0 {
             PairRelation::BBetter
@@ -545,6 +594,11 @@ impl MrvExecutor {
             PairRelation::Conflict
         } else {
             PairRelation::NoSignal
+        };
+
+        PairComparison {
+            relation,
+            max_abs_delta: Some(max_abs_delta),
         }
     }
 
@@ -710,4 +764,16 @@ enum PairRelation {
     Truncated,
     Conflict,
     NoSignal,
+}
+
+impl PairRelation {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::ABetter => "a_before_b",
+            Self::BBetter => "b_before_a",
+            Self::Truncated => "truncated",
+            Self::Conflict => "conflict",
+            Self::NoSignal => "no_signal",
+        }
+    }
 }

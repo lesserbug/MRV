@@ -64,6 +64,7 @@ class LogParser:
             consensus_commits,
             execution_commits,
             batch_stats,
+            pair_stats,
             tusk_auf_orders,
             mrv_auf_orders,
             self.configs,
@@ -74,8 +75,10 @@ class LogParser:
         self.consensus_commits = self._merge_results([x.items() for x in consensus_commits])
         self.execution_commits = self._merge_results([x.items() for x in execution_commits])
         self.batch_stats = self._merge_batch_stats(batch_stats)
+        self.pair_stats = self._merge_pair_stats(pair_stats)
         self.tusk_auf_order = self._select_longest_sequence(tusk_auf_orders)
         self.mrv_auf_order = self._select_longest_sequence(mrv_auf_orders)
+        self.delta_threshold = self._delta_threshold()
 
         # Parse the workers logs.
         try:
@@ -100,6 +103,7 @@ class LogParser:
             )
 
         self.activation_metrics = self._compute_activation_metrics()
+        self.oracle_activation_metrics = self._compute_oracle_activation_metrics()
         self.wave_metrics = self._compute_wave_metrics()
 
     def _merge_results(self, input):
@@ -123,6 +127,14 @@ class LogParser:
         merged = {}
         for mapping in mappings:
             for key, value in mapping.items():
+                if key not in merged:
+                    merged[key] = value
+        return merged
+
+    def _merge_pair_stats(self, pair_stats_by_log):
+        merged = {}
+        for pair_stats in pair_stats_by_log:
+            for key, value in pair_stats.items():
                 if key not in merged:
                     merged[key] = value
         return merged
@@ -206,6 +218,16 @@ class LogParser:
                 ],
             }
 
+        pair_stats = {}
+        for line in findall(r'MRV_PairStats ([^\n]+)', log):
+            fields = dict(findall(r'(\w+)=([^\s]+)', line))
+            key = (int(fields['batch']), fields['a'], fields['b'])
+            raw_delta = fields.get('max_abs_delta', 'na')
+            pair_stats[key] = {
+                'outcome': fields['outcome'],
+                'max_abs_delta': None if raw_delta == 'na' else int(raw_delta),
+            }
+
         tusk_auf_order = findall(r'Tusk_AUF_Committed (B\d+\([^ ]+\))', log)
         mrv_auf_order = findall(r'MRV_AUF_Committed (B\d+\([^ ]+\))', log)
 
@@ -248,6 +270,7 @@ class LogParser:
             consensus_commits,
             execution_commits,
             batch_stats,
+            pair_stats,
             tusk_auf_order,
             mrv_auf_order,
             configs,
@@ -324,8 +347,21 @@ class LogParser:
     def _safe_div(self, numerator, denominator):
         return numerator / denominator if denominator else 0
 
+    def _delta_threshold(self):
+        if not isinstance(self.committee_size, int) or self.committee_size <= 0:
+            return None
+        faults = (self.committee_size - 1) // 3
+        return faults + 1
+
     def _decode_wave_id(self, tx_id):
         return tx_id >> self.WAVE_ID_SHIFT
+
+    def _digest_wave_id(self, digest):
+        waves = {
+            self._decode_wave_id(tx_id)
+            for tx_id in self.batch_samples.get(digest, set())
+        }
+        return next(iter(waves)) if len(waves) == 1 else None
 
     def _partition_order(self, order):
         partitions = {}
@@ -395,6 +431,74 @@ class LogParser:
             'scc_distribution': scc_distribution,
             'totals': dict(totals),
         }
+
+    def _compute_oracle_activation_metrics(self):
+        metrics = {
+            'oracle_pair_count': 0,
+            'oracle_matured_pairs': 0,
+            'oracle_edges': 0,
+            'oracle_no_signal': 0,
+            'oracle_conflict': 0,
+            'oracle_tie_break': 0,
+            'oracle_delta_bucket_total': 0,
+            'delta_eq_0': 0,
+            'delta_eq_1': 0,
+            'delta_ge_threshold': 0,
+        }
+
+        if self.workload != 'waves' or not self.pair_stats:
+            metrics['oracle_matured_pair_coverage'] = 0
+            metrics['oracle_edge_ratio'] = 0
+            metrics['oracle_no_signal_ratio'] = 0
+            metrics['oracle_tie_break_ratio'] = 0
+            return metrics
+
+        for (_, a, b), stats in self.pair_stats.items():
+            wave_a = self._digest_wave_id(a)
+            wave_b = self._digest_wave_id(b)
+            if wave_a is None or wave_b is None or wave_a == wave_b:
+                continue
+
+            metrics['oracle_pair_count'] += 1
+            outcome = stats['outcome']
+            if outcome != 'truncated':
+                metrics['oracle_matured_pairs'] += 1
+
+            if outcome in ('a_before_b', 'b_before_a'):
+                metrics['oracle_edges'] += 1
+            elif outcome == 'no_signal':
+                metrics['oracle_no_signal'] += 1
+            elif outcome == 'conflict':
+                metrics['oracle_conflict'] += 1
+
+            if outcome != 'a_before_b' and outcome != 'b_before_a':
+                metrics['oracle_tie_break'] += 1
+
+            max_abs_delta = stats.get('max_abs_delta')
+            if max_abs_delta is None:
+                continue
+
+            metrics['oracle_delta_bucket_total'] += 1
+            if max_abs_delta == 0:
+                metrics['delta_eq_0'] += 1
+            elif max_abs_delta == 1:
+                metrics['delta_eq_1'] += 1
+            elif self.delta_threshold is not None and max_abs_delta >= self.delta_threshold:
+                metrics['delta_ge_threshold'] += 1
+
+        metrics['oracle_matured_pair_coverage'] = self._safe_div(
+            metrics['oracle_matured_pairs'], metrics['oracle_pair_count']
+        )
+        metrics['oracle_edge_ratio'] = self._safe_div(
+            metrics['oracle_edges'], metrics['oracle_pair_count']
+        )
+        metrics['oracle_no_signal_ratio'] = self._safe_div(
+            metrics['oracle_no_signal'], metrics['oracle_pair_count']
+        )
+        metrics['oracle_tie_break_ratio'] = self._safe_div(
+            metrics['oracle_tie_break'], metrics['oracle_pair_count']
+        )
+        return metrics
 
     def _compute_wave_metrics(self):
         metrics = {
@@ -485,6 +589,22 @@ class LogParser:
             for size in sorted(distribution)
         )
 
+    def _format_delta_buckets(self):
+        oracle = self.oracle_activation_metrics
+        total = oracle['oracle_delta_bucket_total']
+        if total == 0:
+            return 'n/a'
+
+        threshold_label = (
+            f'>={self.delta_threshold}'
+            if self.delta_threshold is not None else '>=delta'
+        )
+        return ', '.join([
+            f'0:{oracle["delta_eq_0"]}/{total}',
+            f'1:{oracle["delta_eq_1"]}/{total}',
+            f'{threshold_label}:{oracle["delta_ge_threshold"]}/{total}',
+        ])
+
     def result(self):
         header_size = self.configs[0]['header_size']
         max_header_delay = self.configs[0]['max_header_delay']
@@ -500,6 +620,7 @@ class LogParser:
         end_to_end_latency = self._end_to_end_latency() * 1_000
         mrv_post_commit_latency = self._mrv_post_commit_latency() * 1_000
         activation = self.activation_metrics
+        oracle = self.oracle_activation_metrics
         wave = self.wave_metrics
         totals = activation['totals']
 
@@ -540,6 +661,11 @@ class LogParser:
                 f' Wave-pure AUFs: {wave["wave_pure_aufs"]:,}\n'
                 f' Mixed-wave AUFs: {wave["mixed_wave_aufs"]:,}\n'
                 f' Wave oracle pairs: {wave["wave_oracle_pairs"]:,}\n'
+                f' Oracle matured pair coverage: {self._format_ratio(oracle["oracle_matured_pairs"], oracle["oracle_pair_count"])}\n'
+                f' Oracle edge ratio: {self._format_ratio(oracle["oracle_edges"], oracle["oracle_pair_count"])}\n'
+                f' Oracle no-signal ratio: {self._format_ratio(oracle["oracle_no_signal"], oracle["oracle_pair_count"])}\n'
+                f' Oracle tie-break-only ratio: {self._format_ratio(oracle["oracle_tie_break"], oracle["oracle_pair_count"])}\n'
+                f' Oracle max|delta| buckets: {self._format_delta_buckets()}\n'
                 f' Tusk wave inversion rate: {self._format_ratio(wave["tusk_wave_inversions"], wave["wave_oracle_pairs"])}\n'
                 f' MRV wave inversion rate: {self._format_ratio(wave["mrv_wave_inversions"], wave["wave_oracle_pairs"])}\n'
             )
