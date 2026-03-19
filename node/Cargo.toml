@@ -25,7 +25,7 @@ consensus = { path = "../consensus" }
 mrv_executor = { path = "../mrv_executor" }
 
 [features]
-benchmark = ["worker/benchmark", "primary/benchmark", "consensus/benchmark"]
+benchmark = ["worker/benchmark", "primary/benchmark", "consensus/benchmark", "mrv_executor/benchmark"]
 
 [[bin]]         
 name = "benchmark_client"   

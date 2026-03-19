@@ -15,3 +15,6 @@ indexmap = "1.9" # 可选，但标准HashMap其实就够了，这里先用std
 primary = { path = "../primary" }
 crypto = { path = "../crypto" }
 consensus = { path = "../consensus" }
+
+[features]
+benchmark = []
