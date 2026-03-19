@@ -514,8 +514,13 @@ class LogParser:
             'wave_oracle_pairs': 0,
             'tusk_wave_inversions': 0,
             'mrv_wave_inversions': 0,
+            'mrv_regressions': 0,
+            'mrv_fixes': 0,
+            'shared_inversions': 0,
             'tusk_wave_inversion_rate': 0,
             'mrv_wave_inversion_rate': 0,
+            'regression_outcomes': Counter(),
+            'fix_outcomes': Counter(),
         }
 
         if self.workload != 'waves':
@@ -565,10 +570,22 @@ class LogParser:
                     else:
                         early, late = second, first
 
-                    if tusk_positions[early] > tusk_positions[late]:
+                    tusk_wrong = tusk_positions[early] > tusk_positions[late]
+                    mrv_wrong = mrv_positions[early] > mrv_positions[late]
+                    outcome_category = self._pair_outcome_category(batch, early, late)
+
+                    if tusk_wrong:
                         metrics['tusk_wave_inversions'] += 1
-                    if mrv_positions[early] > mrv_positions[late]:
+                    if mrv_wrong:
                         metrics['mrv_wave_inversions'] += 1
+                    if not tusk_wrong and mrv_wrong:
+                        metrics['mrv_regressions'] += 1
+                        metrics['regression_outcomes'][outcome_category] += 1
+                    elif tusk_wrong and not mrv_wrong:
+                        metrics['mrv_fixes'] += 1
+                        metrics['fix_outcomes'][outcome_category] += 1
+                    elif tusk_wrong and mrv_wrong:
+                        metrics['shared_inversions'] += 1
 
         metrics['tusk_wave_inversion_rate'] = self._safe_div(
             metrics['tusk_wave_inversions'], metrics['wave_oracle_pairs']
@@ -606,6 +623,22 @@ class LogParser:
             f'1:{oracle["delta_eq_1"]}/{total}',
             f'{threshold_label}:{oracle["delta_ge_threshold"]}/{total}',
         ])
+
+    def _pair_outcome_category(self, batch, a, b):
+        for key in ((batch, a, b), (batch, b, a)):
+            stats = self.pair_stats.get(key)
+            if stats is None:
+                continue
+            outcome = stats['outcome']
+            if outcome in ('a_before_b', 'b_before_a'):
+                return 'edge'
+            return outcome
+        return 'missing'
+
+    def _format_outcome_breakdown(self, counter):
+        labels = ('edge', 'conflict', 'no_signal', 'truncated', 'missing')
+        parts = [f'{label}:{counter.get(label, 0)}' for label in labels]
+        return ', '.join(parts)
 
     def result(self):
         header_size = self.configs[0]['header_size']
@@ -670,6 +703,10 @@ class LogParser:
                 f' Oracle max|delta| buckets: {self._format_delta_buckets()}\n'
                 f' Tusk wave inversion rate: {self._format_ratio(wave["tusk_wave_inversions"], wave["wave_oracle_pairs"])}\n'
                 f' MRV wave inversion rate: {self._format_ratio(wave["mrv_wave_inversions"], wave["wave_oracle_pairs"])}\n'
+                f' MRV regressions over Tusk: {self._format_ratio(wave["mrv_regressions"], wave["wave_oracle_pairs"])}\n'
+                f' MRV fixes over Tusk: {self._format_ratio(wave["mrv_fixes"], wave["wave_oracle_pairs"])}\n'
+                f' Regression attribution: {self._format_outcome_breakdown(wave["regression_outcomes"])}\n'
+                f' Fix attribution: {self._format_outcome_breakdown(wave["fix_outcomes"])}\n'
             )
         else:
             fairness_lines += ' Wave inversion rate: n/a (steady workload)\n'

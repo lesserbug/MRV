@@ -362,7 +362,9 @@ impl MrvExecutor {
     }
 
     // ---------------------------------------------------------------------
-    // MRV ordering in one batch: frozen pair verdicts -> SCC -> topo -> tie-break
+    // MRV ordering in one batch: frozen pair verdicts -> SCC -> topo -> fallback.
+    // The fallback prefers the original batch-local Tusk order so unresolved pairs do not
+    // drift away from the baseline unless a fairness edge forces a change.
     // ---------------------------------------------------------------------
 
     fn sort_batch(&self, batch_index: u64, members: &[Digest]) -> BatchOrdering {
@@ -374,8 +376,15 @@ impl MrvExecutor {
             };
         }
 
+        let baseline_positions: HashMap<Digest, usize> = members
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(idx, digest)| (digest, idx))
+            .collect();
+
         let mut nodes = members.to_vec();
-        nodes.sort_by(|a, b| self.tie_break(a, b));
+        nodes.sort_by(|a, b| self.fallback_order(a, b, &baseline_positions));
 
         let mut graph: HashMap<Digest, HashSet<Digest>> =
             nodes.iter().cloned().map(|d| (d, HashSet::new())).collect();
@@ -414,7 +423,7 @@ impl MrvExecutor {
             }
         }
 
-        let components = self.find_scc(&nodes, &graph);
+        let components = self.find_scc(&nodes, &graph, &baseline_positions);
         stats.scc_sizes = components.iter().map(Vec::len).collect();
         stats.scc_sizes.sort_unstable_by(|a, b| b.cmp(a));
         stats.max_scc_size = stats.scc_sizes.iter().copied().max().unwrap_or(0);
@@ -476,11 +485,13 @@ impl MrvExecutor {
 
         let mut result = Vec::new();
         while !ready.is_empty() {
-            ready.sort_by(|a, b| self.compare_components(&components[*a], &components[*b]));
+            ready.sort_by(|a, b| {
+                self.compare_components(&components[*a], &components[*b], &baseline_positions)
+            });
             let current = ready.remove(0);
 
             let mut component_members = components[current].clone();
-            component_members.sort_by(|a, b| self.tie_break(a, b));
+            component_members.sort_by(|a, b| self.fallback_order(a, b, &baseline_positions));
             result.extend(component_members);
 
             let mut next_components: Vec<usize> = component_graph
@@ -656,7 +667,7 @@ impl MrvExecutor {
             .map_or(0, HashSet::len)
     }
 
-    fn tie_break(&self, a: &Digest, b: &Digest) -> Ordering {
+    fn canonical_tie_break(&self, a: &Digest, b: &Digest) -> Ordering {
         match (self.store.get(a), self.store.get(b)) {
             (Some(ca), Some(cb)) => ca
                 .round()
@@ -667,29 +678,55 @@ impl MrvExecutor {
         }
     }
 
-    fn compare_components(&self, c1: &[Digest], c2: &[Digest]) -> Ordering {
+    fn fallback_order(
+        &self,
+        a: &Digest,
+        b: &Digest,
+        baseline_positions: &HashMap<Digest, usize>,
+    ) -> Ordering {
+        match (baseline_positions.get(a), baseline_positions.get(b)) {
+            (Some(pos_a), Some(pos_b)) => pos_a
+                .cmp(pos_b)
+                .then_with(|| self.canonical_tie_break(a, b)),
+            _ => self.canonical_tie_break(a, b),
+        }
+    }
+
+    fn compare_components(
+        &self,
+        c1: &[Digest],
+        c2: &[Digest],
+        baseline_positions: &HashMap<Digest, usize>,
+    ) -> Ordering {
         let min1 = c1
             .iter()
-            .min_by(|a, b| self.tie_break(a, b))
+            .min_by(|a, b| self.fallback_order(a, b, baseline_positions))
             .expect("component should not be empty");
         let min2 = c2
             .iter()
-            .min_by(|a, b| self.tie_break(a, b))
+            .min_by(|a, b| self.fallback_order(a, b, baseline_positions))
             .expect("component should not be empty");
-        self.tie_break(min1, min2)
+        self.fallback_order(min1, min2, baseline_positions)
     }
 
     fn find_scc(
         &self,
         nodes: &[Digest],
         graph: &HashMap<Digest, HashSet<Digest>>,
+        baseline_positions: &HashMap<Digest, usize>,
     ) -> Vec<Vec<Digest>> {
         let mut visited = HashSet::new();
         let mut finish_stack = Vec::new();
 
         for node in nodes {
             if !visited.contains(node) {
-                self.dfs_forward(node, graph, &mut visited, &mut finish_stack);
+                self.dfs_forward(
+                    node,
+                    graph,
+                    baseline_positions,
+                    &mut visited,
+                    &mut finish_stack,
+                );
             }
         }
 
@@ -705,7 +742,7 @@ impl MrvExecutor {
         }
 
         for tos in reverse_graph.values_mut() {
-            tos.sort_by(|a, b| self.tie_break(a, b));
+            tos.sort_by(|a, b| self.fallback_order(a, b, baseline_positions));
         }
 
         visited.clear();
@@ -728,6 +765,7 @@ impl MrvExecutor {
         &self,
         node: &Digest,
         graph: &HashMap<Digest, HashSet<Digest>>,
+        baseline_positions: &HashMap<Digest, usize>,
         visited: &mut HashSet<Digest>,
         finish_stack: &mut Vec<Digest>,
     ) {
@@ -735,10 +773,16 @@ impl MrvExecutor {
 
         if let Some(neighbors) = graph.get(node) {
             let mut ordered_neighbors: Vec<&Digest> = neighbors.iter().collect();
-            ordered_neighbors.sort_by(|a, b| self.tie_break(a, b));
+            ordered_neighbors.sort_by(|a, b| self.fallback_order(a, b, baseline_positions));
             for neighbor in ordered_neighbors {
                 if !visited.contains(neighbor) {
-                    self.dfs_forward(neighbor, graph, visited, finish_stack);
+                    self.dfs_forward(
+                        neighbor,
+                        graph,
+                        baseline_positions,
+                        visited,
+                        finish_stack,
+                    );
                 }
             }
         }
