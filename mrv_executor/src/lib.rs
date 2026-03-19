@@ -515,15 +515,23 @@ impl MrvExecutor {
         b: &Digest,
         comparison: &PairComparison,
     ) {
+        let a_label = self
+            .store
+            .get(a)
+            .map_or_else(|| format!("{:?}", a), |certificate| certificate.header.to_string());
+        let b_label = self
+            .store
+            .get(b)
+            .map_or_else(|| format!("{:?}", b), |certificate| certificate.header.to_string());
         let max_abs_delta = comparison
             .max_abs_delta
             .map_or_else(|| "na".to_string(), |value| value.to_string());
 
         info!(
-            "MRV_PairStats batch={} a={:?} b={:?} outcome={} max_abs_delta={}",
+            "MRV_PairStats batch={} a={} b={} outcome={} max_abs_delta={}",
             batch_index,
-            a,
-            b,
+            a_label,
+            b_label,
             comparison.relation.as_str(),
             max_abs_delta,
         );

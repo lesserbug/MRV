@@ -356,12 +356,12 @@ class LogParser:
     def _decode_wave_id(self, tx_id):
         return tx_id >> self.WAVE_ID_SHIFT
 
-    def _digest_wave_id(self, digest):
-        waves = {
-            self._decode_wave_id(tx_id)
-            for tx_id in self.batch_samples.get(digest, set())
-        }
-        return next(iter(waves)) if len(waves) == 1 else None
+    def _header_wave_map(self):
+        header_waves = defaultdict(set)
+        for digest, header in self.batch_headers.items():
+            for tx_id in self.batch_samples.get(digest, set()):
+                header_waves[header].add(self._decode_wave_id(tx_id))
+        return header_waves
 
     def _partition_order(self, order):
         partitions = {}
@@ -453,10 +453,15 @@ class LogParser:
             metrics['oracle_tie_break_ratio'] = 0
             return metrics
 
+        header_waves = self._header_wave_map()
         for (_, a, b), stats in self.pair_stats.items():
-            wave_a = self._digest_wave_id(a)
-            wave_b = self._digest_wave_id(b)
-            if wave_a is None or wave_b is None or wave_a == wave_b:
+            waves_a = header_waves.get(a, set())
+            waves_b = header_waves.get(b, set())
+            if len(waves_a) != 1 or len(waves_b) != 1:
+                continue
+            wave_a = next(iter(waves_a))
+            wave_b = next(iter(waves_b))
+            if wave_a == wave_b:
                 continue
 
             metrics['oracle_pair_count'] += 1
@@ -521,10 +526,7 @@ class LogParser:
         if not tusk_batches or not mrv_batches:
             return metrics
 
-        header_waves = defaultdict(set)
-        for digest, header in self.batch_headers.items():
-            for tx_id in self.batch_samples.get(digest, set()):
-                header_waves[header].add(self._decode_wave_id(tx_id))
+        header_waves = self._header_wave_map()
 
         for batch in sorted(set(tusk_batches) & set(mrv_batches)):
             tusk_headers = tusk_batches[batch]
