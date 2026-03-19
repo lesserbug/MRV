@@ -223,6 +223,8 @@ class Bench:
         Print.info('Booting clients...')
         workers_addresses = committee.workers_addresses(faults)
         rate_share = ceil(rate / committee.workers())
+        client_count = committee.workers()
+        client_index = 0
         for i, addresses in enumerate(workers_addresses):
             for (id, address) in addresses:
                 host = Committee.ip(address)
@@ -234,9 +236,13 @@ class Bench:
                     workload=bench_parameters.workload,
                     wave_burst_ms=bench_parameters.wave_burst_ms,
                     wave_gap_ms=bench_parameters.wave_gap_ms,
+                    skew_ms=bench_parameters.skew_ms,
+                    client_index=client_index,
+                    client_count=client_count,
                 )
                 log_file = PathMaker.client_log_file(i, id)
                 self._background_run(host, cmd, log_file)
+                client_index += 1
 
         # Run the primaries (except the faulty ones).
         Print.info('Booting primaries...')

@@ -21,9 +21,12 @@ async fn main() -> Result<()> {
         .args_from_usage("<ADDR> 'The network address of the node where to send txs'")
         .args_from_usage("--size=<INT> 'The size of each transaction in bytes'")
         .args_from_usage("--rate=<INT> 'The rate (txs/s) at which to send the transactions'")
-        .args_from_usage("--workload=[MODE] 'steady or waves workload pattern'")
+        .args_from_usage("--workload=[MODE] 'steady, waves, or skewed_waves workload pattern'")
         .args_from_usage("--wave-burst-ms=[INT] 'The burst duration in ms for waves workload'")
         .args_from_usage("--wave-gap-ms=[INT] 'The silent gap duration in ms for waves workload'")
+        .args_from_usage("--skew-ms=[INT] 'The eager/late dissemination skew in ms for skewed waves workload'")
+        .args_from_usage("--client-index=[INT] 'The deterministic client index used by skewed waves workload'")
+        .args_from_usage("--client-count=[INT] 'The total number of clients used by skewed waves workload'")
         .args_from_usage("--nodes=[ADDR]... 'Network addresses that must be reachable before starting the benchmark.'")
         .setting(AppSettings::ArgRequiredElseHelp)
         .get_matches();
@@ -91,6 +94,13 @@ struct Client {
 enum Workload {
     Steady,
     Waves { burst_ms: u64, gap_ms: u64 },
+    SkewedWaves {
+        attack_burst_ms: u64,
+        gap_ms: u64,
+        skew_ms: u64,
+        client_index: usize,
+        client_count: usize,
+    },
 }
 
 impl Workload {
@@ -119,8 +129,54 @@ impl Workload {
 
                 Ok(Self::Waves { burst_ms, gap_ms })
             }
+            "skewed_waves" => {
+                let attack_burst_ms = matches
+                    .value_of("wave-burst-ms")
+                    .unwrap_or("300")
+                    .parse::<u64>()
+                    .context("The attack burst duration must be a non-negative integer")?;
+                let gap_ms = matches
+                    .value_of("wave-gap-ms")
+                    .unwrap_or("400")
+                    .parse::<u64>()
+                    .context("The wave gap duration must be a non-negative integer")?;
+                let skew_ms = matches
+                    .value_of("skew-ms")
+                    .unwrap_or("200")
+                    .parse::<u64>()
+                    .context("The skew duration must be a non-negative integer")?;
+                let client_index = matches
+                    .value_of("client-index")
+                    .unwrap_or("0")
+                    .parse::<usize>()
+                    .context("The client index must be a non-negative integer")?;
+                let client_count = matches
+                    .value_of("client-count")
+                    .unwrap_or("1")
+                    .parse::<usize>()
+                    .context("The client count must be a positive integer")?;
+
+                if attack_burst_ms == 0 || gap_ms == 0 || skew_ms == 0 || client_count == 0 {
+                    return Err(anyhow::Error::msg(
+                        "Skewed waves requires positive burst, gap, skew, and client count",
+                    ));
+                }
+                if client_index >= client_count {
+                    return Err(anyhow::Error::msg(
+                        "Client index must be smaller than client count",
+                    ));
+                }
+
+                Ok(Self::SkewedWaves {
+                    attack_burst_ms,
+                    gap_ms,
+                    skew_ms,
+                    client_index,
+                    client_count,
+                })
+            }
             other => Err(anyhow::Error::msg(format!(
-                "Unsupported workload mode '{}': expected 'steady' or 'waves'",
+                "Unsupported workload mode '{}': expected 'steady', 'waves', or 'skewed_waves'",
                 other
             ))),
         }
@@ -130,28 +186,48 @@ impl Workload {
         match self {
             Self::Steady => "steady",
             Self::Waves { .. } => "waves",
+            Self::SkewedWaves { .. } => "skewed_waves",
         }
     }
 
-    fn is_active(&self, benchmark_start: Instant) -> bool {
+    fn current_wave_id(&self, benchmark_start: Instant) -> Option<u64> {
         match self {
-            Self::Steady => true,
+            Self::Steady => Some(0),
             Self::Waves { burst_ms, gap_ms } => {
                 let cycle_ms = *burst_ms + *gap_ms;
-                (benchmark_start.elapsed().as_millis() as u64) % cycle_ms < *burst_ms
+                let elapsed_ms = benchmark_start.elapsed().as_millis() as u64;
+                ((elapsed_ms % cycle_ms) < *burst_ms).then_some(elapsed_ms / cycle_ms)
+            }
+            Self::SkewedWaves {
+                attack_burst_ms,
+                gap_ms,
+                skew_ms,
+                client_index,
+                client_count,
+            } => {
+                let cycle_ms = attack_burst_ms + 2 * skew_ms + gap_ms;
+                let elapsed_ms = benchmark_start.elapsed().as_millis() as u64;
+                let cycle = elapsed_ms / cycle_ms;
+                let phase_ms = elapsed_ms % cycle_ms;
+                let delayed_start = (client_count + 1) / 2;
+                let is_delayed = *client_index >= delayed_start;
+                let victim_wave = 2 * cycle;
+                let attacker_wave = victim_wave + 1;
+
+                if phase_ms < *skew_ms {
+                    (!is_delayed).then_some(victim_wave)
+                } else if phase_ms < *skew_ms + *attack_burst_ms {
+                    Some(attacker_wave)
+                } else if phase_ms < 2 * *skew_ms + *attack_burst_ms {
+                    is_delayed.then_some(victim_wave)
+                } else {
+                    None
+                }
             }
         }
     }
 
-    fn make_sample_id(&self, benchmark_start: Instant, sample_counter: u64) -> u64 {
-        let wave_id = match self {
-            Self::Steady => 0,
-            Self::Waves { burst_ms, gap_ms } => {
-                let cycle_ms = *burst_ms + *gap_ms;
-                ((benchmark_start.elapsed().as_millis() as u64) / cycle_ms) as u64
-            }
-        };
-
+    fn make_sample_id(&self, wave_id: u64, sample_counter: u64) -> u64 {
         (wave_id << 48) | (sample_counter & Self::SAMPLE_COUNTER_MASK)
     }
 }
@@ -188,9 +264,31 @@ impl Client {
         tokio::pin!(interval);
 
         info!("Workload: {}", self.workload.name());
-        if let Workload::Waves { burst_ms, gap_ms } = self.workload {
-            info!("Wave burst: {} ms", burst_ms);
-            info!("Wave gap: {} ms", gap_ms);
+        match self.workload {
+            Workload::Waves { burst_ms, gap_ms } => {
+                info!("Wave burst: {} ms", burst_ms);
+                info!("Wave gap: {} ms", gap_ms);
+            }
+            Workload::SkewedWaves {
+                attack_burst_ms,
+                gap_ms,
+                skew_ms,
+                client_index,
+                client_count,
+            } => {
+                let delayed_start = (client_count + 1) / 2;
+                let role = if client_index >= delayed_start {
+                    "delayed"
+                } else {
+                    "eager"
+                };
+                info!("Wave burst: {} ms", attack_burst_ms);
+                info!("Wave gap: {} ms", gap_ms);
+                info!("Skew delay: {} ms", skew_ms);
+                info!("Client role: {}", role);
+                info!("Client index: {}/{}", client_index, client_count);
+            }
+            Workload::Steady => {}
         }
 
         // NOTE: This log entry is used to compute performance.
@@ -201,15 +299,13 @@ impl Client {
             interval.as_mut().tick().await;
             let now = Instant::now();
 
-            if !self.workload.is_active(benchmark_start) {
+            let Some(wave_id) = self.workload.current_wave_id(benchmark_start) else {
                 continue;
-            }
+            };
 
             for x in 0..burst {
                 if x == sample_counter % burst {
-                    let tx_id = self
-                        .workload
-                        .make_sample_id(benchmark_start, sample_counter);
+                    let tx_id = self.workload.make_sample_id(wave_id, sample_counter);
 
                     // NOTE: This log entry is used to compute performance.
                     info!("Sending sample transaction {}", tx_id);

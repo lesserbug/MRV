@@ -214,7 +214,7 @@ class BenchParameters:
             self.tx_size = int(json['tx_size'])
 
             self.workload = str(json['workload']) if 'workload' in json else 'steady'
-            if self.workload not in ('steady', 'waves'):
+            if self.workload not in ('steady', 'waves', 'skewed_waves'):
                 raise ConfigError('Unsupported workload type')
 
             self.wave_burst_ms = int(
@@ -223,6 +223,9 @@ class BenchParameters:
             self.wave_gap_ms = int(
                 json['wave_gap_ms']
             ) if 'wave_gap_ms' in json else 1_200
+            self.skew_ms = int(
+                json['skew_ms']
+            ) if 'skew_ms' in json else 200
            
             self.duration = int(json['duration'])
 
@@ -237,6 +240,8 @@ class BenchParameters:
             raise ConfigError('There should be more nodes than faults')
         if self.wave_burst_ms <= 0 or self.wave_gap_ms <= 0:
             raise ConfigError('Wave burst and gap must be positive')
+        if self.workload == 'skewed_waves' and self.skew_ms <= 0:
+            raise ConfigError('Skewed waves requires a positive skew delay')
 
 
 class PlotParameters:

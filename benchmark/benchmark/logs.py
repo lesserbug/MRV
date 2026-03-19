@@ -46,11 +46,13 @@ class LogParser:
             workloads,
             wave_bursts,
             wave_gaps,
+            skews,
         ) = zip(*results)
         self.misses = sum(misses)
         self.workload = workloads[0]
         self.wave_burst_ms = next((x for x in wave_bursts if x is not None), None)
         self.wave_gap_ms = next((x for x in wave_gaps if x is not None), None)
+        self.skew_ms = next((x for x in skews if x is not None), None)
 
         # Parse the primaries logs.
         try:
@@ -105,6 +107,7 @@ class LogParser:
         self.activation_metrics = self._compute_activation_metrics()
         self.oracle_activation_metrics = self._compute_oracle_activation_metrics()
         self.wave_metrics = self._compute_wave_metrics()
+        self.skew_metrics = self._compute_skew_metrics()
 
     def _merge_results(self, input):
         # Keep the earliest timestamp.
@@ -155,9 +158,10 @@ class LogParser:
 
         size = int(search(r'Transactions size: (\d+)', log).group(1))
         rate = int(search(r'Transactions rate: (\d+)', log).group(1))
-        workload = search(r'Workload: (steady|waves)', log)
+        workload = search(r'Workload: (steady|waves|skewed_waves)', log)
         wave_burst = search(r'Wave burst: (\d+) ms', log)
         wave_gap = search(r'Wave gap: (\d+) ms', log)
+        skew = search(r'Skew delay: (\d+) ms', log)
 
         tmp = search(r'\[(.*Z) .* Start ', log).group(1)
         start = self._to_posix(tmp)
@@ -176,6 +180,7 @@ class LogParser:
             workload.group(1) if workload else 'steady',
             int(wave_burst.group(1)) if wave_burst else None,
             int(wave_gap.group(1)) if wave_gap else None,
+            int(skew.group(1)) if skew else None,
         )
 
     def _parse_primaries(self, log):
@@ -446,7 +451,7 @@ class LogParser:
             'delta_ge_threshold': 0,
         }
 
-        if self.workload != 'waves' or not self.pair_stats:
+        if self.workload not in ('waves', 'skewed_waves') or not self.pair_stats:
             metrics['oracle_matured_pair_coverage'] = 0
             metrics['oracle_edge_ratio'] = 0
             metrics['oracle_no_signal_ratio'] = 0
@@ -507,7 +512,7 @@ class LogParser:
 
     def _compute_wave_metrics(self):
         metrics = {
-            'enabled': self.workload == 'waves',
+            'enabled': self.workload in ('waves', 'skewed_waves'),
             'covered_batches': 0,
             'wave_pure_aufs': 0,
             'mixed_wave_aufs': 0,
@@ -523,7 +528,7 @@ class LogParser:
             'fix_outcomes': Counter(),
         }
 
-        if self.workload != 'waves':
+        if self.workload not in ('waves', 'skewed_waves'):
             return metrics
 
         tusk_batches = self._partition_order(self.tusk_auf_order)
@@ -595,6 +600,90 @@ class LogParser:
         )
         return metrics
 
+    def _compute_skew_metrics(self):
+        metrics = {
+            'enabled': self.workload == 'skewed_waves',
+            'skew_attack_pairs': 0,
+            'tusk_skew_inversions': 0,
+            'mrv_skew_inversions': 0,
+            'tusk_skew_inversion_rate': 0,
+            'mrv_skew_inversion_rate': 0,
+            'mrv_regressions': 0,
+            'mrv_fixes': 0,
+            'regression_outcomes': Counter(),
+            'fix_outcomes': Counter(),
+        }
+
+        if self.workload != 'skewed_waves':
+            return metrics
+
+        tusk_batches = self._partition_order(self.tusk_auf_order)
+        mrv_batches = self._partition_order(self.mrv_auf_order)
+        if not tusk_batches or not mrv_batches:
+            return metrics
+
+        header_waves = self._header_wave_map()
+
+        for batch in sorted(set(tusk_batches) & set(mrv_batches)):
+            tusk_headers = tusk_batches[batch]
+            mrv_headers = mrv_batches[batch]
+            if len(tusk_headers) != len(mrv_headers):
+                continue
+
+            tusk_positions = {header: idx for idx, header in enumerate(tusk_headers)}
+            mrv_positions = {header: idx for idx, header in enumerate(mrv_headers)}
+
+            pure_headers = {}
+            for header in tusk_headers:
+                waves = header_waves.get(header, set())
+                if len(waves) == 1:
+                    pure_headers[header] = next(iter(waves))
+
+            headers = sorted(
+                pure_headers,
+                key=lambda header: tusk_positions.get(header, len(tusk_headers)),
+            )
+
+            for i, first in enumerate(headers):
+                for second in headers[i + 1:]:
+                    first_wave = pure_headers[first]
+                    second_wave = pure_headers[second]
+                    if abs(first_wave - second_wave) != 1:
+                        continue
+
+                    early_wave = min(first_wave, second_wave)
+                    if early_wave % 2 != 0:
+                        continue
+
+                    metrics['skew_attack_pairs'] += 1
+                    if first_wave < second_wave:
+                        victim, attacker = first, second
+                    else:
+                        victim, attacker = second, first
+
+                    tusk_wrong = tusk_positions[victim] > tusk_positions[attacker]
+                    mrv_wrong = mrv_positions[victim] > mrv_positions[attacker]
+                    outcome_category = self._pair_outcome_category(batch, victim, attacker)
+
+                    if tusk_wrong:
+                        metrics['tusk_skew_inversions'] += 1
+                    if mrv_wrong:
+                        metrics['mrv_skew_inversions'] += 1
+                    if not tusk_wrong and mrv_wrong:
+                        metrics['mrv_regressions'] += 1
+                        metrics['regression_outcomes'][outcome_category] += 1
+                    elif tusk_wrong and not mrv_wrong:
+                        metrics['mrv_fixes'] += 1
+                        metrics['fix_outcomes'][outcome_category] += 1
+
+        metrics['tusk_skew_inversion_rate'] = self._safe_div(
+            metrics['tusk_skew_inversions'], metrics['skew_attack_pairs']
+        )
+        metrics['mrv_skew_inversion_rate'] = self._safe_div(
+            metrics['mrv_skew_inversions'], metrics['skew_attack_pairs']
+        )
+        return metrics
+
     def _format_ratio(self, numerator, denominator, precision=2):
         ratio = 100 * self._safe_div(numerator, denominator)
         return f'{ratio:.{precision}f}% ({numerator:,}/{denominator:,})'
@@ -640,7 +729,7 @@ class LogParser:
         parts = [f'{label}:{counter.get(label, 0)}' for label in labels]
         return ', '.join(parts)
 
-    def result(self):
+    def result(self, include_fairness=False):
         header_size = self.configs[0]['header_size']
         max_header_delay = self.configs[0]['max_header_delay']
         gc_depth = self.configs[0]['gc_depth']
@@ -657,12 +746,15 @@ class LogParser:
         activation = self.activation_metrics
         oracle = self.oracle_activation_metrics
         wave = self.wave_metrics
+        skew = self.skew_metrics
         totals = activation['totals']
 
         workload_lines = f' Workload: {self.workload}\n'
-        if self.workload == 'waves':
+        if self.workload in ('waves', 'skewed_waves'):
             workload_lines += f' Wave burst: {self.wave_burst_ms:,} ms\n'
             workload_lines += f' Wave gap: {self.wave_gap_ms:,} ms\n'
+        if self.workload == 'skewed_waves' and self.skew_ms is not None:
+            workload_lines += f' Skew delay: {self.skew_ms:,} ms\n'
 
         fairness_lines = (
             ' + FAIRNESS:\n'
@@ -708,8 +800,20 @@ class LogParser:
                 f' Regression attribution: {self._format_outcome_breakdown(wave["regression_outcomes"])}\n'
                 f' Fix attribution: {self._format_outcome_breakdown(wave["fix_outcomes"])}\n'
             )
+            if skew['enabled']:
+                fairness_lines += (
+                    f' Skew attack pairs: {skew["skew_attack_pairs"]:,}\n'
+                    f' Tusk skew attack inversion rate: {self._format_ratio(skew["tusk_skew_inversions"], skew["skew_attack_pairs"])}\n'
+                    f' MRV skew attack inversion rate: {self._format_ratio(skew["mrv_skew_inversions"], skew["skew_attack_pairs"])}\n'
+                    f' MRV skew regressions over Tusk: {self._format_ratio(skew["mrv_regressions"], skew["skew_attack_pairs"])}\n'
+                    f' MRV skew fixes over Tusk: {self._format_ratio(skew["mrv_fixes"], skew["skew_attack_pairs"])}\n'
+                    f' Skew regression attribution: {self._format_outcome_breakdown(skew["regression_outcomes"])}\n'
+                    f' Skew fix attribution: {self._format_outcome_breakdown(skew["fix_outcomes"])}\n'
+                )
         else:
             fairness_lines += ' Wave inversion rate: n/a (steady workload)\n'
+
+        fairness_section = f'\n{fairness_lines}' if include_fairness else ''
 
         return (
             '\n'
@@ -743,15 +847,14 @@ class LogParser:
             f' End-to-end BPS: {round(end_to_end_bps):,} B/s\n'
             f' End-to-end latency: {round(end_to_end_latency):,} ms\n'
             f' MRV post-commit latency: {round(mrv_post_commit_latency):,} ms\n'
-            '\n'
-            f'{fairness_lines}'
+            f'{fairness_section}\n'
             '-----------------------------------------\n'
         )
 
-    def print(self, filename):
+    def print(self, filename, include_fairness=False):
         assert isinstance(filename, str)
         with open(filename, 'a') as f:
-            f.write(self.result())
+            f.write(self.result(include_fairness=include_fairness))
 
     @classmethod
     def process(cls, directory, faults=0):
