@@ -315,7 +315,7 @@ class Bench:
         Print.info('Parsing logs and computing performance...')
         return LogParser.process(PathMaker.logs_path(), faults=faults)
 
-    def run(self, bench_parameters_dict, node_parameters_dict, debug=False):
+    def run(self, bench_parameters_dict, node_parameters_dict, debug=False, include_fairness=False):
         assert isinstance(debug, bool)
         Print.heading('Starting remote benchmark')
         try:
@@ -371,7 +371,7 @@ class Bench:
                             bench_parameters.collocate,
                             r, 
                             bench_parameters.tx_size, 
-                        ))
+                        ), include_fairness=include_fairness)
                     except (subprocess.SubprocessError, GroupException, ParseError) as e:
                         self.kill(hosts=selected_hosts)
                         if isinstance(e, GroupException):

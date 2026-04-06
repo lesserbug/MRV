@@ -161,8 +161,9 @@ def install(ctx):
 
 
 @task
-def remote(ctx, debug=False, workload='steady', wave_burst_ms=300, wave_gap_ms=1200, skew_ms=200):
+def remote(ctx, debug=False, workload='steady', wave_burst_ms=300, wave_gap_ms=1200, skew_ms=200, fairness=True):
     ''' Run benchmarks on AWS '''
+    fairness = bool(int(fairness)) if isinstance(fairness, str) else bool(fairness)
     bench_params = {
         'faults': 3,
         'nodes': [10],
@@ -187,7 +188,7 @@ def remote(ctx, debug=False, workload='steady', wave_burst_ms=300, wave_gap_ms=1
         'max_batch_delay': 200  # ms
     }
     try:
-        Bench(ctx).run(bench_params, node_params, debug)
+        Bench(ctx).run(bench_params, node_params, debug, include_fairness=fairness)
     except BenchError as e:
         Print.error(e)
 
