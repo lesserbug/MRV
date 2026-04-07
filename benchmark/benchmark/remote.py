@@ -70,8 +70,10 @@ class Bench:
             # This is missing from the Rocksdb installer (needed for Rocksdb).
             'sudo apt-get install -y clang',
 
-            # Clone the repo.
-            f'(git clone {self.settings.repo_url} || (cd {self.settings.repo_name} ; git pull))'
+            # Clone the repo into the configured path so later update/build
+            # steps do not depend on the URL basename matching repo_name.
+            f'(git clone {self.settings.repo_url} {self.settings.repo_name} || '
+            f'(cd {self.settings.repo_name} && git pull))'
         ]
         hosts = self.manager.hosts(flat=True)
         try:
