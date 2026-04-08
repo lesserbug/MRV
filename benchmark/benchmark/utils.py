@@ -12,6 +12,11 @@ class BenchError(Exception):
 
 class PathMaker:
     @staticmethod
+    def system_tag():
+        # Keep benchmark artifacts for each system isolated.
+        return 'mrv'
+
+    @staticmethod
     def binary_path():
         return join('..', 'target', 'release')
 
@@ -68,8 +73,13 @@ class PathMaker:
     def result_file(faults, nodes, workers, collocate, rate, tx_size):
         return join(
             PathMaker.results_path(),
-            f'bench-{faults}-{nodes}-{workers}-{collocate}-{rate}-{tx_size}.txt'
+            f'{PathMaker.system_tag()}-bench-'
+            f'{faults}-{nodes}-{workers}-{collocate}-{rate}-{tx_size}.txt'
         )
+
+    @staticmethod
+    def result_files_glob():
+        return join(PathMaker.results_path(), f'{PathMaker.system_tag()}-*.txt')
 
     @staticmethod
     def plots_path():
@@ -78,14 +88,20 @@ class PathMaker:
     @staticmethod
     def agg_file(type, faults, nodes, workers, collocate, rate, tx_size, max_latency=None):
         if max_latency is None:
-            name = f'{type}-bench-{faults}-{nodes}-{workers}-{collocate}-{rate}-{tx_size}.txt'
+            name = (
+                f'{PathMaker.system_tag()}-{type}-bench-'
+                f'{faults}-{nodes}-{workers}-{collocate}-{rate}-{tx_size}.txt'
+            )
         else:
-            name = f'{type}-{max_latency}-bench-{faults}-{nodes}-{workers}-{collocate}-{rate}-{tx_size}.txt'
+            name = (
+                f'{PathMaker.system_tag()}-{type}-{max_latency}-bench-'
+                f'{faults}-{nodes}-{workers}-{collocate}-{rate}-{tx_size}.txt'
+            )
         return join(PathMaker.plots_path(), name)
 
     @staticmethod
     def plot_file(name, ext):
-        return join(PathMaker.plots_path(), f'{name}.{ext}')
+        return join(PathMaker.plots_path(), f'{PathMaker.system_tag()}-{name}.{ext}')
 
 
 class Color:
