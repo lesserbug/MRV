@@ -9,7 +9,7 @@ This repository is intended for research and benchmarking. It is not production 
 
 ## What MRV Adds
 
-The main addition is the `mrv_executor` crate. It receives committed DAG outputs from the consensus layer, constructs committed execution slices, and orders AUFs using MRV's structural evidence rules.
+The core MRV logic is implemented in the `mrv_executor` crate. The repository also includes integration changes across `consensus/`, `node/`, and `benchmark/`: consensus outputs are routed to MRV, the node binary wires MRV between consensus delivery and execution analysis, and the benchmark harness records MRV ordering latency and end-to-end performance.
 
 At a high level, MRV performs four steps:
 
@@ -35,8 +35,6 @@ MRV is conservative by design. If the committed DAG does not provide mature, one
 ├── store/           # RocksDB-backed storage
 └── worker/          # Narwhal worker
 ```
-
-The MRV pipeline is wired in `node/src/main.rs`: consensus outputs are sent to `MrvExecutor`, and the benchmark analyzer observes MRV's ordered output.
 
 ## Requirements
 
