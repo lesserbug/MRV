@@ -44,10 +44,11 @@ class LogParser:
                 results = p.map(self._parse_primaries, primaries)
         except (ValueError, IndexError, AttributeError) as e:
             raise ParseError(f'Failed to parse nodes\' logs: {e}')
-        proposals, consensus_commits, execution_commits, self.configs, primary_ips = zip(*results)
+        proposals, consensus_commits, execution_commits, finalize_stats, self.configs, primary_ips = zip(*results)
         self.proposals = self._merge_results([x.items() for x in proposals])
         self.consensus_commits = self._merge_results([x.items() for x in consensus_commits])
         self.execution_commits = self._merge_results([x.items() for x in execution_commits])
+        self.mrv_finalize_stats = self._merge_finalize_stats(finalize_stats)
 
         # Parse the workers logs.
         try:
@@ -78,6 +79,24 @@ class LogParser:
                 if not k in merged or merged[k] > v:
                     merged[k] = v
         return merged
+
+    def _merge_finalize_stats(self, inputs):
+        merged = {}
+        for stats_by_batch in inputs:
+            for batch_index, stats in stats_by_batch.items():
+                current = merged.setdefault(
+                    batch_index,
+                    {key: [] for key in stats}
+                )
+                for key, value in stats.items():
+                    current[key].append(value)
+
+        return {
+            batch_index: {
+                key: mean(values) for key, values in stats.items()
+            }
+            for batch_index, stats in merged.items()
+        }
 
     def _parse_clients(self, log):
         if search(r'Error', log) is not None:
@@ -112,6 +131,36 @@ class LogParser:
         tmp = [(d, self._to_posix(t)) for t, d in tmp]
         execution_commits = self._merge_results([tmp])
 
+        tmp = findall(
+            r'MRV_FinalizeStats batch_index=(\d+) members=(\d+) min_member_round=(\d+) '
+            r'max_member_round=(\d+) batch_horizon=(\d+) wait_rounds=(\d+) '
+            r'mature_members=(\d+) capped_members=(\d+) sort_us=(\d+)',
+            log
+        )
+        finalize_stats = {
+            int(batch_index): {
+                'members': int(members),
+                'min_member_round': int(min_member_round),
+                'max_member_round': int(max_member_round),
+                'batch_horizon': int(batch_horizon),
+                'wait_rounds': int(wait_rounds),
+                'mature_members': int(mature_members),
+                'capped_members': int(capped_members),
+                'sort_us': int(sort_us),
+            }
+            for (
+                batch_index,
+                members,
+                min_member_round,
+                max_member_round,
+                batch_horizon,
+                wait_rounds,
+                mature_members,
+                capped_members,
+                sort_us,
+            ) in tmp
+        }
+
         if not consensus_commits and not execution_commits:
             tmp = findall(r'\[(.*Z) .* Committed B\d+\([^ ]+\) -> ([^ ]+=)', log)
             tmp = [(d, self._to_posix(t)) for t, d in tmp]
@@ -145,7 +194,7 @@ class LogParser:
 
         ip = search(r'booted on (\d+.\d+.\d+.\d+)', log).group(1)
         
-        return proposals, consensus_commits, execution_commits, configs, ip
+        return proposals, consensus_commits, execution_commits, finalize_stats, configs, ip
 
     def _parse_workers(self, log):
         if search(r'(?:panic|Error)', log) is not None:
@@ -169,7 +218,7 @@ class LogParser:
         return sum(self.sizes[d] for d in commits if d in self.sizes)
 
     def _consensus_throughput(self):
-        if not self.consensus_commits:
+        if not self.consensus_commits or not self.proposals:
             return 0, 0, 0
         start, end = min(self.proposals.values()), max(self.consensus_commits.values())
         duration = end - start
@@ -179,7 +228,16 @@ class LogParser:
         return tps, bps, duration
 
     def _consensus_latency(self):
-        latency = [c - self.proposals[d] for d, c in self.consensus_commits.items()]
+        latency = [
+            c - self.proposals[d]
+            for d, c in self.consensus_commits.items()
+            if d in self.proposals
+        ]
+        missing = len(self.consensus_commits) - len(latency)
+        if missing:
+            Print.warn(
+                f'Skipping {missing:,} consensus latency sample(s) without a proposal timestamp'
+            )
         return mean(latency) if latency else 0
 
     def _end_to_end_throughput(self):
@@ -211,6 +269,19 @@ class LogParser:
         ]
         return mean(latency) if latency else 0
 
+    def _mrv_finalize_summary(self):
+        if not self.mrv_finalize_stats:
+            return None
+
+        stats = list(self.mrv_finalize_stats.values())
+        return {
+            'members': mean(x['members'] for x in stats),
+            'wait_rounds': mean(x['wait_rounds'] for x in stats),
+            'mature_members': mean(x['mature_members'] for x in stats),
+            'capped_members': mean(x['capped_members'] for x in stats),
+            'sort_us': mean(x['sort_us'] for x in stats),
+        }
+
     def result(self):
         header_size = self.configs[0]['header_size']
         max_header_delay = self.configs[0]['max_header_delay']
@@ -225,6 +296,18 @@ class LogParser:
         end_to_end_tps, end_to_end_bps, duration = self._end_to_end_throughput()
         end_to_end_latency = self._end_to_end_latency() * 1_000
         mrv_post_commit_latency = self._mrv_post_commit_latency() * 1_000
+        mrv_finalize_summary = self._mrv_finalize_summary()
+
+        mrv_finalize_lines = ''
+        if mrv_finalize_summary is not None:
+            mrv_finalize_lines = (
+                f' MRV avg finalized batch members: {mrv_finalize_summary["members"]:.2f}\n'
+                f' MRV avg wait rounds: {mrv_finalize_summary["wait_rounds"]:.2f}\n'
+                f' MRV avg mature/capped members: '
+                f'{mrv_finalize_summary["mature_members"]:.2f} / '
+                f'{mrv_finalize_summary["capped_members"]:.2f}\n'
+                f' MRV avg sort time: {mrv_finalize_summary["sort_us"]:,.1f} us\n'
+            )
 
         return (
             '\n'
@@ -257,6 +340,7 @@ class LogParser:
             f' End-to-end BPS: {round(end_to_end_bps):,} B/s\n'
             f' End-to-end latency: {round(end_to_end_latency):,} ms\n'
             f' MRV post-commit latency: {round(mrv_post_commit_latency):,} ms\n'
+            f'{mrv_finalize_lines}'
             '-----------------------------------------\n'
         )
 

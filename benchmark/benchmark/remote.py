@@ -273,6 +273,16 @@ class Bench:
         duration = bench_parameters.duration
         for _ in progress_bar(range(20), prefix=f'Running benchmark ({duration} sec):'):
             sleep(ceil(duration / 20))
+
+        drain_duration = bench_parameters.drain_duration
+        if drain_duration > 0:
+            Print.info('Stopping clients and draining the system...')
+            g = Group(*hosts, user='ubuntu', connect_kwargs=self.connect)
+            g.run(f'({CommandMaker.kill_clients()} || true)', hide=True)
+
+            for _ in progress_bar(range(20), prefix=f'Draining benchmark ({drain_duration} sec):'):
+                sleep(ceil(drain_duration / 20))
+
         self.kill(hosts=hosts, delete_logs=False)
 
     def _logs(self, committee, faults):

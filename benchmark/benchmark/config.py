@@ -214,6 +214,7 @@ class BenchParameters:
             self.tx_size = int(json['tx_size'])
            
             self.duration = int(json['duration'])
+            self.drain_duration = int(json['drain_duration']) if 'drain_duration' in json else 0
 
             self.runs = int(json['runs']) if 'runs' in json else 1
         except KeyError as e:
@@ -224,6 +225,9 @@ class BenchParameters:
 
         if min(self.nodes) <= self.faults:
             raise ConfigError('There should be more nodes than faults')
+
+        if self.drain_duration < 0:
+            raise ConfigError('Drain duration must be non-negative')
 
 
 class PlotParameters:

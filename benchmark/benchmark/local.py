@@ -41,6 +41,16 @@ class LocalBench:
         except subprocess.SubprocessError as e:
             raise BenchError("Failed to kill testbed", e)
 
+    def _kill_clients(self):
+        try:
+            subprocess.run(
+                [CommandMaker.kill_clients()],
+                shell=True,
+                stderr=subprocess.DEVNULL,
+            )
+        except subprocess.SubprocessError as e:
+            raise BenchError("Failed to kill clients", e)
+
     def run(self, debug=False):
         assert isinstance(debug, bool)
         Print.heading("Starting local benchmark")
@@ -122,6 +132,14 @@ class LocalBench:
             # Wait for all transactions to be processed.
             Print.info(f"Running benchmark ({self.duration} sec)...")
             sleep(self.duration)
+
+            if self.drain_duration > 0:
+                Print.info(
+                    f"Stopping clients and draining benchmark ({self.drain_duration} sec)..."
+                )
+                self._kill_clients()
+                sleep(self.drain_duration)
+
             self._kill_nodes()
 
             # Parse logs and return the parser.

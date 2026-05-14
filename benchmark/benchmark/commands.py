@@ -60,6 +60,22 @@ class CommandMaker:
         return 'tmux kill-server'
 
     @staticmethod
+    def kill_clients():
+        return (
+            "tmux list-sessions -F '#S' 2>/dev/null "
+            "| grep '^client-' "
+            "| xargs -r -n1 tmux kill-session -t"
+        )
+
+    @staticmethod
+    def kill_nodes():
+        return (
+            "tmux list-sessions -F '#S' 2>/dev/null "
+            "| grep -E '^(primary|worker)-' "
+            "| xargs -r -n1 tmux kill-session -t"
+        )
+
+    @staticmethod
     def alias_binaries(origin):
         assert isinstance(origin, str)
         node, client = join(origin, 'node'), join(origin, 'benchmark_client')
