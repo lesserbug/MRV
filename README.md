@@ -1,71 +1,176 @@
-> **Note to readers:** MystenLabs is making this codebase production-ready [here](https://github.com/MystenLabs/sui/tree/main/narwhal).
 
-# Narwhal and Tusk
+# MRV: Post-Consensus Structural Ordering for DAG-BFT
 
-[![build status](https://img.shields.io/github/actions/workflow/status/asonnino/narwhal/rust.yml?branch=master&logo=github&style=flat-square)](https://github.com/asonnino/narwhal/actions)
-[![rustc](https://img.shields.io/badge/rustc-1.51+-blue?style=flat-square&logo=rust)](https://www.rust-lang.org)
-[![python](https://img.shields.io/badge/python-3.9-blue?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/release/python-390/)
-[![license](https://img.shields.io/badge/license-Apache-blue.svg?style=flat-square)](LICENSE)
+MRV is a research prototype that extends a Narwhal/Tusk-style DAG-BFT stack with a post-consensus structural ordering layer. The codebase is based on the open-source Narwhal/Tusk implementation and adds an `mrv_executor` layer between consensus delivery and execution.
 
-This repo provides an implementation of [Narwhal and Tusk](https://arxiv.org/pdf/2105.11827.pdf). The codebase has been designed to be small, efficient, and easy to benchmark and modify. It has not been designed to run in production but uses real cryptography ([dalek](https://doc.dalek.rs/ed25519_dalek)), networking ([tokio](https://docs.rs/tokio)), and storage ([rocksdb](https://docs.rs/rocksdb)).
+MRV does not modify Narwhal's worker dissemination path, Tusk's voting logic, or the consensus commit rule. Instead, after Tusk commits a DAG output, MRV interprets the committed DAG structure to derive a deterministic, slice-local order over atomic units of fairness (AUFs). It uses authenticated creator, round, and ancestry metadata already present in the committed DAG.
 
-## Quick Start
+This repository is intended for research and benchmarking. It is not production software.
 
-The core protocols are written in Rust, but all benchmarking scripts are written in Python and run with [Fabric](http://www.fabfile.org/).
-To deploy and benchmark a testbed of 4 nodes on your local machine, clone the repo and install the python dependencies:
+## What MRV Adds
 
-```
-$ git clone https://github.com/asonnino/narwhal.git
-$ cd narwhal/benchmark
-$ pip install -r requirements.txt
-```
+The main addition is the `mrv_executor` crate. It receives committed DAG outputs from the consensus layer, constructs committed execution slices, and orders AUFs using MRV's structural evidence rules.
 
-You also need to install Clang (required by rocksdb) and [tmux](https://linuxize.com/post/getting-started-with-tmux/#installing-tmux) (which runs all nodes and clients in the background). Finally, run a local benchmark using fabric:
+At a high level, MRV performs four steps:
 
-```
-$ fab local
-```
+1. **Committed-slice extraction**: identify newly delivered AUFs from each committed DAG output.
+2. **Creator-level visibility tracking**: count which creators' committed AUFs see each target AUF through DAG ancestry.
+3. **Pairwise verdicts**: add an evidence-backed precedence edge only when a mature AUF pair has a one-sided Byzantine-robust visibility signal.
+4. **Graph linearization**: assemble causal and evidence-backed constraints, condense SCCs, and use deterministic completion only for residual ambiguity.
 
-This command may take a long time the first time you run it (compiling rust code in `release` mode may be slow) and you can customize a number of benchmark parameters in `fabfile.py`. When the benchmark terminates, it displays a summary of the execution similarly to the one below.
+MRV is conservative by design. If the committed DAG does not provide mature, one-sided evidence for a pair, MRV abstains and resolves the pair only through deterministic completion.
 
-```
------------------------------------------
- SUMMARY:
------------------------------------------
- + CONFIG:
- Faults: 0 node(s)
- Committee size: 4 node(s)
- Worker(s) per node: 1 worker(s)
- Collocate primary and workers: True
- Input rate: 50,000 tx/s
- Transaction size: 512 B
- Execution time: 19 s
+## Repository Layout
 
- Header size: 1,000 B
- Max header delay: 100 ms
- GC depth: 50 round(s)
- Sync retry delay: 10,000 ms
- Sync retry nodes: 3 node(s)
- batch size: 500,000 B
- Max batch delay: 100 ms
-
- + RESULTS:
- Consensus TPS: 46,478 tx/s
- Consensus BPS: 23,796,531 B/s
- Consensus latency: 464 ms
-
- End-to-end TPS: 46,149 tx/s
- End-to-end BPS: 23,628,541 B/s
- End-to-end latency: 557 ms
------------------------------------------
+```text
+.
+├── benchmark/       # Local and AWS benchmark harnesses
+├── config/          # Protocol and benchmark configuration
+├── consensus/       # Tusk consensus logic
+├── crypto/          # Cryptographic primitives
+├── mrv_executor/    # MRV post-consensus ordering layer
+├── network/         # Networking utilities
+├── node/            # Node binary and MRV pipeline wiring
+├── primary/         # Narwhal primary
+├── store/           # RocksDB-backed storage
+└── worker/          # Narwhal worker
 ```
 
-## Next Steps
+The MRV pipeline is wired in `node/src/main.rs`: consensus outputs are sent to `MrvExecutor`, and the benchmark analyzer observes MRV's ordered output.
 
-The next step is to read the paper [Narwhal and Tusk: A DAG-based Mempool and Efficient BFT Consensus](https://arxiv.org/pdf/2105.11827.pdf). It is then recommended to have a look at the README files of the [worker](https://github.com/asonnino/narwhal/tree/master/worker) and [primary](https://github.com/asonnino/narwhal/tree/master/primary) crates. An additional resource to better understand the Tusk consensus protocol is the paper [All You Need is DAG](https://arxiv.org/abs/2102.08325) as it describes a similar protocol.
+## Requirements
 
-The README file of the [benchmark folder](https://github.com/asonnino/narwhal/tree/master/benchmark) explains how to benchmark the codebase and read benchmarks' results. It also provides a step-by-step tutorial to run benchmarks on [Amazon Web Services (AWS)](https://aws.amazon.com) accross multiple data centers (WAN).
+The core protocol is written in Rust. Benchmark orchestration is written in Python and uses Fabric.
+
+You need:
+
+- Rust toolchain
+- Python 3.9+
+- Clang, required by RocksDB
+- tmux, used to run local nodes and clients
+- AWS credentials, only for remote WAN experiments
+
+Install Python benchmark dependencies:
+
+```bash
+cd benchmark
+pip install -r requirements.txt
+```
+
+## Quick Start: Local Benchmark
+
+Clone the repository and select the MRV branch:
+
+```bash
+git clone https://github.com/lesserbug/MRV.git
+cd MRV
+git checkout mrv-dev2
+cd benchmark
+pip install -r requirements.txt
+```
+
+Run a local benchmark:
+
+```bash
+fab local
+```
+
+The default local benchmark starts a small committee on the local machine. The first run may take longer because Rust binaries are compiled in release mode.
+
+You can customize the local run from the command line:
+
+```bash
+fab local --nodes=5 --workers=1 --faults=0 --per-worker-rate=12500
+```
+
+To print MRV fairness and coverage diagnostics, enable the fairness summary:
+
+```bash
+fab local --fairness=1
+```
+
+## Remote AWS Benchmarking
+
+Remote benchmarks are controlled from the `benchmark` directory through Fabric. Before running AWS experiments, edit `benchmark/settings.json`:
+
+```json
+{
+    "key": {
+        "name": "aws",
+        "path": "/path/to/your/aws/key"
+    },
+    "port": 5000,
+    "repo": {
+        "name": "MRV",
+        "url": "https://github.com/lesserbug/MRV.git",
+        "branch": "mrv-dev2"
+    },
+    "instances": {
+        "type": "m5.xlarge",
+        "regions":  ["us-west-1", "us-east-1", "ap-northeast-1", "ap-northeast-2", "eu-central-1"]
+    }
+}
+```
+This is an active development prototype. If remote experiment orchestration behaves differently across environments, compare the benchmark control scripts under `benchmark/benchmark/` between the `mrv-dev2` branch and the `mrv-dev2-wsl-exp-snapshot-20260514` branch; the latter preserves the WSL-side scripts used for our AWS experiment control.
+
+
+Create and inspect a remote testbed:
+
+```bash
+fab create --nodes=10
+fab info
+```
+
+Install the codebase on all machines:
+
+```bash
+fab install
+```
+
+Run the remote benchmark:
+
+```bash
+fab remote
+```
+
+Stop or destroy the testbed when finished:
+
+```bash
+fab stop
+fab destroy
+```
+
+Use `fab kill` if tmux sessions are still running on the remote machines.
+
+## Benchmark Parameters
+
+The main benchmark parameters are defined in `benchmark/fabfile.py`.
+
+Common parameters include:
+
+- `nodes`: committee size
+- `workers`: workers per validator
+- `faults`: configured fault-tolerance parameter
+- `rate`: offered transaction load
+- `tx_size`: transaction size
+- `batch_size`: worker batch size
+- `max_batch_delay`: maximum worker batch delay
+- `max_header_delay`: maximum primary header delay
+- `gc_depth`: committed-history retention depth, also used as MRV's observation window cap in this prototype
+
+The default remote benchmark uses a geo-distributed AWS deployment and reports throughput, end-to-end latency, MRV post-commit latency, and optional MRV coverage diagnostics.
+
+## Plotting Results
+
+After remote experiments, use:
+
+```bash
+fab plot
+```
+
+The plotting code reads benchmark logs from `benchmark/logs/` and generates throughput-latency figures according to the parameters in `benchmark/fabfile.py`.
 
 ## License
 
-This software is licensed as [Apache 2.0](LICENSE).
+This software is licensed under Apache 2.0. See `LICENSE`.
+```
