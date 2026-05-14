@@ -1,8 +1,7 @@
-
-
-
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
+#[cfg(feature = "benchmark")]
+use std::time::Instant;
 
 use consensus::CommittedSubDag;
 use crypto::Hash as _;
@@ -36,6 +35,14 @@ impl AufState {
 #[derive(Default)]
 struct BatchState {
     members: Vec<Digest>,
+}
+
+#[cfg(feature = "benchmark")]
+struct FinalizeMetrics {
+    min_member_round: Round,
+    max_member_round: Round,
+    mature_members: usize,
+    capped_members: usize,
 }
 
 pub struct MrvExecutor {
@@ -232,7 +239,26 @@ impl MrvExecutor {
                 return Ok(());
             }
 
+            #[cfg(feature = "benchmark")]
+            let metrics = self.collect_finalize_metrics(&members)?;
+            #[cfg(feature = "benchmark")]
+            let sort_start = Instant::now();
             let sorted = self.sort_batch(&members);
+            #[cfg(feature = "benchmark")]
+            let sort_us = sort_start.elapsed().as_micros();
+            #[cfg(feature = "benchmark")]
+            info!(
+                "MRV_FinalizeStats batch_index={} members={} min_member_round={} max_member_round={} batch_horizon={} wait_rounds={} mature_members={} capped_members={} sort_us={}",
+                next_round,
+                members.len(),
+                metrics.min_member_round,
+                metrics.max_member_round,
+                batch_horizon,
+                batch_horizon.saturating_sub(metrics.max_member_round),
+                metrics.mature_members,
+                metrics.capped_members,
+                sort_us
+            );
             for digest in sorted {
                 if let Some(certificate) = self.store.get(&digest).cloned() {
                     self.tx_output.send(certificate).await.map_err(|_| ())?;
@@ -250,6 +276,32 @@ impl MrvExecutor {
             horizon = horizon.max(h);
         }
         Some(horizon)
+    }
+
+    #[cfg(feature = "benchmark")]
+    fn collect_finalize_metrics(&self, members: &[Digest]) -> Option<FinalizeMetrics> {
+        let mut min_member_round = Round::MAX;
+        let mut max_member_round = 0;
+        let mut mature_members = 0;
+        let mut capped_members = 0;
+
+        for digest in members {
+            let state = self.auf_states.get(digest)?;
+            min_member_round = min_member_round.min(state.round);
+            max_member_round = max_member_round.max(state.round);
+            if state.mature {
+                mature_members += 1;
+            } else {
+                capped_members += 1;
+            }
+        }
+
+        Some(FinalizeMetrics {
+            min_member_round,
+            max_member_round,
+            mature_members,
+            capped_members,
+        })
     }
 
     fn release_batch(&mut self, batch_index: u64, members: &[Digest]) {
