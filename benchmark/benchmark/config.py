@@ -1,6 +1,13 @@
 # Copyright(C) Facebook, Inc. and its affiliates.
 from json import dump, load
 from collections import OrderedDict
+from uuid import uuid4
+
+
+# Keep the benchmark compatibility default explicit and independent from
+# Narwhal/Tusk garbage collection. The JSON written for a node always contains
+# one scalar value, even when a benchmark sweeps several windows.
+DEFAULT_MRV_WINDOW = 50
 
 
 class ConfigError(Exception):
@@ -163,6 +170,7 @@ class LocalCommittee(Committee):
 
 class NodeParameters:
     def __init__(self, json):
+        json = dict(json)
         inputs = []
         try:
             inputs += [json['header_size']]
@@ -178,12 +186,29 @@ class NodeParameters:
         if not all(isinstance(x, int) for x in inputs):
             raise ConfigError('Invalid parameters type')
 
+        mrv_window = json.get('mrv_window', DEFAULT_MRV_WINDOW)
+        mrv_windows = mrv_window if isinstance(mrv_window, list) else [mrv_window]
+        if (
+            not mrv_windows
+            or any(not isinstance(x, int) or isinstance(x, bool) or x < 1 for x in mrv_windows)
+        ):
+            raise ConfigError('Invalid MRV window')
+
+        self.mrv_windows = mrv_windows
+        # Keep a scalar in the base node configuration. ``print`` selects the
+        # requested value for each run of a sweep.
+        json['mrv_window'] = mrv_windows[0]
         self.json = json
 
-    def print(self, filename):
+    def print(self, filename, mrv_window=None):
         assert isinstance(filename, str)
+        mrv_window = self.mrv_windows[0] if mrv_window is None else mrv_window
+        if mrv_window not in self.mrv_windows:
+            raise ConfigError(f'Unknown MRV window {mrv_window}')
+        data = dict(self.json)
+        data['mrv_window'] = mrv_window
         with open(filename, 'w') as f:
-            dump(self.json, f, indent=4, sort_keys=True)
+            dump(data, f, indent=4, sort_keys=True)
 
 
 class BenchParameters:
@@ -215,6 +240,7 @@ class BenchParameters:
            
             self.duration = int(json['duration'])
             self.drain_duration = int(json['drain_duration']) if 'drain_duration' in json else 0
+            self.experiment_id = str(json.get('experiment_id') or uuid4().hex)
 
             self.runs = int(json['runs']) if 'runs' in json else 1
         except KeyError as e:
@@ -255,6 +281,12 @@ class PlotParameters:
                 self.collocate = True
 
             self.tx_size = int(json['tx_size'])
+
+            self.mrv_window = int(
+                json.get('mrv_window', DEFAULT_MRV_WINDOW)
+            )
+            if self.mrv_window < 1:
+                raise ConfigError('Invalid MRV window')
 
             max_lat = json['max_latency']
             max_lat = max_lat if isinstance(max_lat, list) else [max_lat]

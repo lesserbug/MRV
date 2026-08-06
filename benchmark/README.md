@@ -20,9 +20,12 @@ bench_params = {
     'tx_size': 512,
     'faults': 0,
     'duration': 20,
+    'drain_duration': 30,
 }
 ```
 They specify the number of primaries (`nodes`) and workers per primary (`workers`) to deploy, the input rate (tx/s) at which the clients submits transactions to the system (`rate`), the size of each transaction in bytes (`tx_size`), the number of faulty nodes ('faults), and the duration of the benchmark in seconds (`duration`). The minimum transaction size is 9 bytes, this ensure that the transactions of a client are all different. The benchmarking script will deploy as many clients as workers and divide the input rate equally amongst each client. For instance, if you configure the testbed with 4 nodes, 1 worker per node, and an input rate of 1,000 tx/s (as in the example above), the scripts will deploy 4 clients each submitting transactions to one node at a rate of 250 tx/s. When the parameters `faults` is set to `f > 0`, the last `f` nodes and clients are not booted; the system will thus run with `n-f` nodes (and `n-f` clients). 
+
+For fixed-window experiments, `drain_duration` is the time after clients stop during which replicas keep running. It must be long enough for pending slices to reach their seal horizons. The supplied W sweep uses 30 seconds as a conservative pilot value. A zero value remains available for legacy runs but produces an explicit right-censoring warning.
 
 The nodes parameters determine the configuration for the primaries and workers:
 ```python
@@ -30,6 +33,7 @@ node_params = {
     'header_size': 1_000,
     'max_header_delay': 100,
     'gc_depth': 50,
+    'mrv_window': 4,
     'sync_retry_delay': 10_000,
     'sync_retry_nodes': 3,
     'batch_size': 500_000,
@@ -40,17 +44,23 @@ They are defined as follows:
 * `header_size`: The preferred header size. The primary creates a new header when it has enough parents and enough batches' digests to reach `header_size`. Denominated in bytes.
 * `max_header_delay`: The maximum delay that the primary waits between generating two headers, even if the header did not reach `max_header_size`. Denominated in ms.
 * `gc_depth`: The depth of the garbage collection (Denominated in number of rounds).
+* `mrv_window`: The independent fixed MRV comparison window in DAG rounds. A list such as `[2, 4, 8, 16, 32]` requests a benchmark sweep; the parameters JSON uploaded for each run still contains one scalar value. Older benchmark dictionaries that omit this key use the explicit compatibility default `50`, never `gc_depth`.
 * `sync_retry_delay`: The delay after which the synchronizer retries to send sync requests. Denominated in ms.
 * `sync_retry_nodes`: Determine with how many nodes to sync when re-trying to send sync-request. These nodes are picked at random from the committee.
 * `batch_size`: The preferred batch size. The workers seal a batch of transactions when it reaches this size. Denominated in bytes.
 * `max_batch_delay`: The delay after which the workers seal a batch of transactions, even if `max_batch_size` is not reached. Denominated in ms.
 
 ### Run the benchmark
+
+Each benchmark invocation gets an `experiment_id` in `results/mrv-slice-stats.csv`, so reruns of the same configuration remain distinguishable. Zero denominators remain blank and use a per-metric `zero_denominator` status; the row-level `derived_status` remains `valid`, so a valid no-edge slice is not discarded. A registered slice without a matching `MRV_SliceStats` record is retained with `data_status=right_censored`. If an existing CSV uses an older schema, the parser asks you to archive or remove it instead of appending misaligned rows.
+
+`incomparable_pair_inversion_count` measures total MRV intervention relative to the exporter order. Its `constrained_inversion_count` subset has a directed condensation-DAG path between the endpoints' distinct SCCs. `unconstrained_inversion_count` is the remaining intervention without that strict cross-SCC constraint; it can include pairs inside one SCC and must not be interpreted as evidence-free ordering.
+
 Once you specified both `bench_params` and `node_params` as desired, run:
 ```
 $ fab local
 ```
-This command first recompiles your code in `release` mode (and with the `benchmark` feature flag activated), thus ensuring you always benchmark the latest version of your code. This may take a long time the first time you run it. It then generates the configuration files and keys for each node, and runs the benchmarks with the specified parameters. It finally parses the logs and displays a summary of the execution similarly to the one below. All the configuration and key files are hidden JSON files; i.e., their name starts with a dot (`.`), such as `.committee.json`.
+This command first recompiles your code in `release` mode (and with the `benchmark` feature flag activated), thus ensuring you always benchmark the latest version of your code. This may take a long time the first time you run it. It then generates the configuration files and keys for each node, and runs the benchmarks with the specified parameters. It finally parses the logs and displays a summary of the execution similarly to the one below. MRV's per-replica, per-slice aggregate records and derived rates are appended to `results/mrv-slice-stats.csv`; zero denominators remain blank and have an explicit `zero_denominator` status rather than `NaN`. All the configuration and key files are hidden JSON files; i.e., their name starts with a dot (`.`), such as `.committee.json`.
 ```
 -----------------------------------------
  SUMMARY:
@@ -67,6 +77,7 @@ This command first recompiles your code in `release` mode (and with the `benchma
  Header size: 1,000 B
  Max header delay: 100 ms
  GC depth: 50 round(s)
+ MRV window: 4 round(s)
  Sync retry delay: 10,000 ms
  Sync retry nodes: 3 node(s)
  batch size: 500,000 B
@@ -80,6 +91,7 @@ This command first recompiles your code in `release` mode (and with the `benchma
  End-to-end TPS: 46,149 tx/s
  End-to-end BPS: 23,628,541 B/s
  End-to-end latency: 557 ms
+ MRV slice records: 120 valid, 0 malformed, 0 unavailable
 -----------------------------------------
 ```
 The 'Consensus TPS' and 'Consensus latency' respectively report the average throughput and latency without considering the client. The consensus latency thus refers to the time elapsed between the block's creation and its commit. In contrast, 'End-to-end TPS' and 'End-to-end latency' report the performance of the whole system, starting from when the client submits the transaction. The end-to-end latency is often called 'client-perceived latency'. To accurately measure this value without degrading performance, the client periodically submits 'sample' transactions that are tracked across all the modules until they get committed into a block; the benchmark scripts use sample transactions to estimate the end-to-end latency.
@@ -195,7 +207,7 @@ After setting up the testbed, running a benchmark on AWS is similar to running i
 def remote(ctx):
     ...
 ```
-The benchmark parameters are similar to [local benchmarks](https://github.com/asonnino/narwhal/tree/master/benchmark#local-benchmarks) but allow to specify the number of nodes and the input rate as arrays to automate multiple benchmarks with a single command. The parameter `runs` specifies the number of times to repeat each benchmark (to later compute the average and stdev of the results), and the parameter `collocate` specifies whether to collocate all the node's workers and the primary on the same machine. If `collocate` is set to `False`, the script will run one node per data center (AWS region), with its primary and each of its worker running on a dedicated instance.
+The benchmark parameters are similar to [local benchmarks](https://github.com/asonnino/narwhal/tree/master/benchmark#local-benchmarks) but allow to specify the number of nodes and the input rate as arrays to automate multiple benchmarks with a single command. The node parameter `mrv_window` likewise accepts a scalar or a list for a fixed-window sweep. The parameter `runs` specifies the number of times to repeat each benchmark (to later compute the average and stdev of the results), and the parameter `collocate` specifies whether to collocate all the node's workers and the primary on the same machine. If `collocate` is set to `False`, the script will run one node per data center (AWS region), with its primary and each of its worker running on a dedicated instance.
 ```python
 bench_params = {
     'nodes': [10, 20, 30],
@@ -205,6 +217,7 @@ bench_params = {
     'tx_size': 512,
     'faults': 0,
     'duration': 300,
+    'drain_duration': 30,
     'runs': 2,
 }
 ```

@@ -23,6 +23,11 @@ class LocalBench:
         try:
             self.bench_parameters = BenchParameters(bench_parameters_dict)
             self.node_parameters = NodeParameters(node_parameters_dict)
+            if len(self.node_parameters.mrv_windows) != 1:
+                raise ConfigError(
+                    'LocalBench requires one scalar MRV window per run; '
+                    'the fab local task expands window sweeps'
+                )
         except ConfigError as e:
             raise BenchError("Invalid nodes or bench parameters", e)
 
@@ -139,12 +144,27 @@ class LocalBench:
                 )
                 self._kill_clients()
                 sleep(self.drain_duration)
+            else:
+                Print.warn(
+                    'drain_duration is 0; the final MRV window is right-censored'
+                )
 
             self._kill_nodes()
 
             # Parse logs and return the parser.
             Print.info("Parsing logs...")
-            return LogParser.process(PathMaker.logs_path(), faults=self.faults)
+            parser = LogParser.process(
+                PathMaker.logs_path(),
+                faults=self.faults,
+                deployment='local',
+                node_count=nodes,
+                input_rate=rate,
+                mrv_window=self.node_parameters.mrv_windows[0],
+                run_index=1,
+                experiment_id=self.experiment_id,
+            )
+            parser.print_mrv(PathMaker.mrv_results_file())
+            return parser
 
         except (subprocess.SubprocessError, ParseError) as e:
             self._kill_nodes()

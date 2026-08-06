@@ -1,5 +1,5 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
 use clap::{crate_name, crate_version, App, AppSettings, ArgMatches, SubCommand};
 use config::Export as _;
 use config::Import as _;
@@ -86,6 +86,7 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
         }
         None => Parameters::default(),
     };
+    ensure!(parameters.mrv_window > 0, "MRV window must be positive");
 
     // Make the data store.
     let store = Store::new(store_path).context("Failed to create a store")?;
@@ -126,7 +127,7 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
                 rx_consensus_to_mrv,
                 tx_mrv_to_client,
                 committee_size,
-                parameters.gc_depth,
+                parameters.mrv_window,
             );
         }
 

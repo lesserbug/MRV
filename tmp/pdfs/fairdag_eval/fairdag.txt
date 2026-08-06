@@ -1,0 +1,1318 @@
+
+===== PAGE 1 =====
+FairDAG: Consensus Fairness over Multi-Proposer Causal Design
+Dakai Kang, Junchao Chen, Tien Tuan Anh Dinh†, Mohammad Sadoghi
+Exploratory Systems Lab, University of California, Davis
+†Deakin University
+ABSTRACT databases, for example [3, 36, 48, 60, 68], and under Byzantine-
+The rise of cryptocurrencies like Bitcoin and Ethereum has driven failure settings in blockchains and verifiable databases [16, 55, 78]
+interest in blockchain database technology, with smart contracts whereByzantineparticipantscanhavearbitrarymaliciousbehavior.
+enabling the growth of decentralized finance (DeFi). However, re- In the presence of Byzantine participants, even though transaction
+search has shown that adversaries exploit transaction ordering to ordering is consistent, its fairness remains vulnerable to order-
+extractprofitsthroughattackslikefront-running,sandwichattacks, ing manipulation attacks. Such an “order manipulation crisis” is
+and liquidation manipulation. This issue affects blockchains where possible because block proposers have full control over transac-
+block proposers have full control over transaction ordering. To ad- tion selection and ordering. Byzantine proposers can censor or re-
+dress this, a more fair transaction ordering mechanism is essential. ordertransactionstoextractMaximalExtractableValue(MEV) from
+Existing fairness protocols, such as Pompe and Themis, operate blocks [23, 37, 50, 66, 67, 70, 73, 77], which is unfair to other par-
+on leader-based consensus protocols, which not only suffer from ticipants. Attacks include front-running, back-running, sandwich
+low throughput caused by single-leader bottleneck, but also give attacks, liquidation manipulation, and time-bandit attacks [23, 57–
+adversarial block proposers to manipulate transaction ordering. To 59, 69].
+address these limitations, we propose a new framework FairDAG The key to achieving fair transaction ordering lies in preventing
+that runs fairness protocols on top of DAG-based consensus proto- proposers from dominating the ordering. Existing studies [18, 22,
+cols,whichimprovesprotocolperformanceinboththroughputand 44, 46, 52, 53, 79] have proposed various fairness protocols. Unlike
+fairness quality, leveraging the multi-proposer design and validity traditionalprotocolswhereeachblockcontainsalistoftransactions,
+property of DAG-based consensus protocols. in fairness protocols, each block contains local orderings from a
+Weconductedacomprehensiveanalyticalandexperimentaleval- set of participants. Once blocks are committed, a final transaction
+uation of two FairDAG variants—FairDAG-AB and FairDAG-RL. ordering is derived from the local orderings. Different fairness
+Our results demonstrate that FairDAG outperforms prior fairness protocols guarantee different fairness properties, reflecting the
+protocols in both throughput and fairness quality. preferencesofcorrectparticipantswhohonestlyreporttheorderin
+whichtheyreceivetransactions.Forexample,Pompe[79]calculates
+the assigned ordering indicator for each transaction and orders
+PVLDBReferenceFormat:
+DakaiKang,JunchaoChen,TienTuanAnhDinh,MohammadSadoghi. transactionsbasedonit.Itguaranteesthattransaction𝑇 1 isordered
+FairDAG:ConsensusFairnessoverMulti-ProposerCausalDesign.PVLDB, before𝑇 2 if every correct participant receives𝑇 1 before any correct
+19(2):265-278,2025. participant receives𝑇 2, a property named Ordering Linearizability.
+doi:10.14778/3773749.3773763 Themis [44] constructs a dependency graph among transactions
+and determines the ordering according to the edges of the graph.
+PVLDBArtifactAvailability: It guarantees that if a𝛾 proportion of correct participants receive
+Thesourcecode,data, and/orotherartifacts havebeenmade availableat 𝑇 1 before𝑇 2, then𝑇 1 will be ordered no later than𝑇 2 -a property
+https://github.com/apache/incubator-resilientdb/tree/fairdag. named𝛾-Batch-Order-Fairness.
+Weobservethatawell-designedfairnessprotocolshouldachieve
+1 INTRODUCTION the following goals:
+The emergence of cryptocurrencies, including Bitcoin [54] and G1 ResiliencetoOrderingManipulation.Theprotocolshould
+Ethereum [16], has sparked broad interest in blockchain database limit Byzantine participants’ influence on the final transac-
+technology[1,10,13,72].Blockchainenablesanewclassofapplica- tion order to preserve fairness properties.
+tions, namely decentralized finance (DeFi) [9, 14, 35, 61, 76], whose G2 Minimal Correct Participants Requirement. The pro-
+market capitalization exceeds 70 billion. DeFi requires consistency tocol should preserve fairness properties while relying on
+and fairness in transaction ordering. The former ensures that all as few correct participants as possible.
+participants agree on the same transaction order, which has been G3 High Performance. Fairness protocols should minimize
+addressed under crash-failure settings of traditional distributed the overhead introduced by fair ordering, achieving high
+throughput and low latency.
+ThisworkislicensedundertheCreativeCommonsBY-NC-ND4.0International Unfortunately, previous fairness protocols [18, 44–46, 53, 79]
+License.Visithttps://creativecommons.org/licenses/by-nc-nd/4.0/toviewacopyof leverage leader-based consensus protocols [20, 30, 74], relying on
+thislicense.Foranyusebeyondthosecoveredbythislicense,obtainpermissionby
+emailinginfo@vldb.org.Copyrightisheldbytheowner/author(s).Publicationrights a single leader to collect local orderings from other participants.
+licensedtotheVLDBEndowment. A Byzantine leader can manipulate transaction ordering by selec-
+ProceedingsoftheVLDBEndowment,Vol.19,No.2ISSN2150-8097.
+tively collecting local orderings to maximize its MEV. Moreover,
+doi:10.14778/3773749.3773763
+even without Byzantine behavior, a single leader may become a
+265
+
+===== PAGE 2 =====
+p
+th
+e
+e
+rf
+m
+or
+e
+m
+ss
+a
+a
+n
+g
+c
+e
+e
+c
+b
+o
+o
+m
+ttl
+p
+e
+l
+n
+e
+e
+x
+c
+i
+k
+ty
+w
+o
+h
+f
+e
+b
+n
+ro
+th
+ad
+e
+c
+w
+a
+o
+st
+r
+i
+k
+n
+l
+g
+oa
+c
+d
+ol
+e
+l
+x
+e
+c
+c
+e
+te
+e
+d
+ds
+lo
+it
+c
+s
+a
+c
+l
+a
+o
+p
+r
+a
+d
+c
+e
+i
+r
+t
+i
+y
+n
+,
+g
+a
+s
+s 𝑅
+𝑅
+1
+2
+:
+:
+{
+{
+𝑇
+𝑇
+1
+2
+,
+,
+𝑇
+𝑇
+2
+3
+,
+,
+𝑇
+𝑇
+3
+4
+,
+,
+𝑇
+𝑇
+4
+1
+}
+}
+𝑇2
+grows quadratically with the number of participants. 𝑅 3 : {𝑇 3 ,𝑇 4 ,𝑇 1 ,𝑇 2 } 𝑇1 𝑇3
+To address the challenges posed by the underlying leader-based 𝑅 4 : {𝑇 4 ,𝑇 1 ,𝑇 2 ,𝑇 3 } 𝑇4
+consensusprotocols,weproposeFairDAG,anovelframeworkthat
+runsfairnessprotocolsontopofDAG-basedconsensusprotocols[6, Figure 1: Condorcet Cycle
+8, 24, 43, 62, 63], which provide the following features that can
+enhance ordering fairness:
+(4) We conducted comprehensive analytical and experimental
+• Multi-Proposer High-throughput Design: DAG-based evaluation of our protocols. The results show that: com-
+protocolsallowallparticipantstoproposeblocksinparallel. pared to Pompe and Themis, FairDAG-AB and FairDAG-
+This approach improves system performance by alleviating RL outperform in both throughput and fairness quality,
+the bottleneck introduced by a single leader. which reflects the fairness protocols’ resilience against ad-
+• Validity through Causal Design: Blocks in DAG-based versarial ordering manipulations.
+protocols reference blocks from other participants, forming
+This paper is structured as follows. Section 2 presents the back-
+a Directed Acyclic Graph (DAG). The causal relationship in
+ground. Section 3 introduces the system model. Section 4 presents
+DAG guarantees that vertices from correct participants are
+an overview of FairDAG protocols. Section 5 and Section 6 de-
+eventually committed by all correct participants.
+scribe the details of FairDAG-AB and FairDAG-RL1. Section 7 an-
+alytically compares FairDAG with prior fairness protocols Pompe
+The Multi-Proposer High-throughput Design removes the bottle- and Themis. Section 8 presents the experimental evaluation of
+neck caused by a single leader (G3). The validity constrains the FairDAG and baseline protocols. Section 9 discusses other related
+Byzantine participants’ ability to selectively collect local orderings works, and Section 10 concludes.
+(G1), and thus lowers the requirement on the number of correct
+participants (G2). 2 BACKGROUND
+In FairDAG, each participant proposes its block containing the
+FairDAG-AB and FairDAG-RL execute fairness protocols atop
+local ordering as a DAG vertex and reliably broadcasts it, and a
+DAG-based consensus protocols. Beginning with this section, our
+final transaction ordering is deterministically generated based on
+discussion is framed within the context of Byzantine Fault Toler-
+the vertices committed by the underlying DAG-based consensus
+ant (BFT) protocols, where participants are referred to as replicas.
+protocols. We designed two variants of FairDAG, namely absolute-
+Byzantinereplicas,corruptedbyanadversary,mayexhibitarbitrary
+ordering FairDAG-AB and relative-ordering FairDAG-RL.
+malicious behavior, whereas the remaining correct replicas behave
+There are two main challenges in employing DAG-based proto-
+benignly.Inthissection,wepresentthedefinitionsofthreefairness
+colsastheunderlyingconsensuslayerforfairness.First,tomitigate
+properties and introduce the DAG-based consensus protocols.
+the high latency of DAG-based consensus protocols, participants
+should leverage uncommitted DAG vertices to reduce the latency
+2.1 Receive-Order-Fairness
+for fairness decisions, but participants may hold inconsistent views
+of uncommitted vertices. Second, Byzantine participants may at- Definition 2.1. Receive-Order-Fairness. For any two transac-
+tempt to manipulate the ordering by selectively ignoring vertices tions𝑇 1 and𝑇 2, if all correct replicas receive𝑇 1 before𝑇 2, then𝑇 1
+proposed by specific participants. FairDAG addresses these chal- must be ordered before𝑇 2 in the final ordering.
+lenges through a novel ordering indicator manager, adaptive fair-
+ness thresholds, and new DAG construction rules that collectively We show thatit is impossible to alwaysguaranteeReceive-Order-
+ensure fairness. Fairness in the presence of Byzantine replicas for Condorcet Cycles.
+We make the following contributions: Figure 1 illustrates this impossibility with a concrete example. Con-
+sider four replicas 𝑅 1 ,𝑅 2 ,𝑅 3 ,𝑅 4, among which at most one may be
+Byzantine. Let there be four transactions𝑇 1 ,𝑇 2 ,𝑇 3 ,𝑇 4. As shown on
+(1) We propose FairDAG-AB, a absolute fairness protocol that the left side of the figure, for any two commands𝑇 𝑖 and𝑇 𝑖+1 (mod-
+guarantees Ordering Linearizability. We propose a Ordering ulo 4) , three replicas receive𝑇 𝑖 before𝑇 𝑖+1 but the fourth differs.
+IndicatorManager andanadaptivefairnessthresholdcalled
+Since the identity of the Byzantine replica is unknown, we respect
+LPAOI that are compatible with the multi-proposer design
+all majority-endorsed orderings supported by at least three replicas
+and commit rules of the DAG-based consensus protocols.
+when determining the final ordering. The right side of Figure 1 de-
+(2) We propose FairDAG-RL, a relative fairness protocol that picts a directed graph where an edge𝑇 𝑖 →𝑇 𝑗 indicates that at least
+guarantees𝛾-batch-order-fairness. Leveraging the validity three replicas received𝑇 𝑖 before𝑇 𝑗. The resulting graph contains
+property of DAG-based consensus protocols, we adopt new
+a Condorcet Cycle [12, 21]—a cycle of pairwise preferences that
+thresholds for dependency graph construction to improve
+cannot be linearly extended without violating at least one of them.
+systemperformanceandreducetherequirementofminimal
+Hence, the Receive-Order-Fairness is impossible in this case.
+correct participant number.
+(3) In FairDAG, we apply new rules for constructing a DAG
+to guarantee fairness against adversarial participants. 1seeSection8inourextendedreport[39]forcorrectnessproofs
+266
+
+===== PAGE 3 =====
+𝑅 𝑅 𝑅 3 2 1 : : : { { { ( ( ( 𝑇 𝑇 𝑇 1 1 2 , , , 1 1 1) ) ) , , , ( ( ( 𝑇 𝑇 𝑇 2 3 1 , , , 1 2 2 ) ) ) , , , ( ( ( 𝑇 𝑇 𝑇 3 2 4 , , , 3 3 3 ) ) ) , , , ( ( ( 𝑇 𝑇 𝑇 4 4 3 , , , 4 4 4 ) ) ) } } } 𝑅 𝑅 2 1 : : { { 𝑇 𝑇 0 0 , , 𝑇 𝑇 2 1 , , 𝑇 𝑇 3 2 , , 𝑇 𝑇 4 3 , , 𝑇 𝑇 1 4 , , 𝑇 𝑇 5 5 } } 𝑏 1 : {𝑇 0 }
+𝑅 4 : {(𝑇 1 ,1), (𝑇 2 ,2), (𝑇 3 ,3), (𝑇 4 ,4)} 𝑅 3 : {𝑇 0 ,𝑇 3 ,𝑇 4 ,𝑇 1 ,𝑇 2 ,𝑇 5 } 𝑏 2 : {𝑇 1 ,𝑇 2 ,𝑇 3 ,𝑇 4 }
+𝑅 4 : {𝑇 0 ,𝑇 4 ,𝑇 1 ,𝑇 2 ,𝑇 3 ,𝑇 5 }
+Figure 2:𝑇 1 will be ordered before𝑇 4 if Ordering Linearizabil- Final Ordering: {𝑇 0 ,𝑇 1 ,𝑇 2 ,𝑇 3 ,𝑇 4 ,𝑇 5 } 𝑏 3 : {𝑇 5 }
+ity holds regardless of the local ordering from 𝑅 4.
+(a) (b)
+2.2 Ordering Linearizability Figure 3: A final ordering of six transactions that satisfies
+𝛾-Batch-Order-Fairness with𝛾 = 2, 3 correct replicas, and 1
+OrderingLinearizabilityisafairnesspropertyintroducedbyPompe[79] 3
+Byzantine replica.
+andadoptedbyourprotocol,FairDAG-AB.Toachievethisproperty,
+each replica assigns a monotonically increasing ordering indicator
+(denoted 𝑜𝑖) to each transaction reflecting the order it receives 𝑇 1 before𝑇 2, then𝑇 1 must be ordered no later than𝑇 2 in the final
+the transactions. The final ordering is then derived from ordering
+ordering.
+indicators collected from a majority of replicas.
+Denoting by𝑜𝑖𝑠 𝑖 𝐶 the set of ordering indicators for the transac- Figure 3 presents an example satisfying𝛾-Batch-Order-Fairness,
+tion𝑇 𝑖 from the correct replicas, we define Ordering Linearizability: where we have n = 4 replicas (at most f = 1 replica can be Byzan-
+tine) and 6 transactions. Assuming that the fairness protocol gen-
+Definition 2.2. Ordering Linearizability. For any two transac-
+erates a final ordering that can be split into three cyclic dependent
+tions𝑇 1 and𝑇 2, if all ordering indicators in𝑜𝑖𝑠𝐶 1 are smaller than batches, for any two transactions, 𝛾-Batch-Order-Fairness holds.
+all those
+in𝑜𝑖𝑠𝐶
+2 , i.e., For example,𝑇 0 is received earlier than𝑇 1 by correct replicas of
+∀𝑜𝑖 1 ∈ 𝑜𝑖𝑠𝐶 1 ,∀𝑜𝑖 2 ∈ 𝑜𝑖𝑠𝐶 2 : 𝑜𝑖 1 < 𝑜𝑖 2 . 𝛾(n−f) = 3 and𝑇 0 is ordered in a batch earlier than𝑇 1.
+then𝑇 1 must be ordered before𝑇 2 in the final ordering. 2.4 DAG-based Consensus Protocols
+Figure2illustratesthisdefinitionwithanexampleinvolvingfour
+replicas, where replicas 𝑅 1, 𝑅 2, 𝑅 3 are correct, and 𝑅 4 is Byzantine. rou D n A ds G . - I b n a e s a e c d h B ro F u T nd co 𝑟 n , s e e v n e s r u y s re p p r l o ic t a oc p o r l o s po [2 s 4 e , s 4 a 3 b , lo 6 c 3 k ] , o re p f e e r r a r t e e d i t n o
+Each replica assigns local ordering indicators to four transactions.
+F an or d t 𝑜 ra 𝑖𝑠 n 𝐶 sac = tio {3 n , s 4 𝑇 , 1 4 a }, n r d e 𝑇 s 4 p , e t c h t e iv c e o l r y r . ec S t in re c p e li a c l a l s in as d s i i c g a n to 𝑜 r 𝑖𝑠 s 𝐶 1 in = 𝑜 { 𝑖𝑠 2 𝐶 ,1, a 1 re } a p s re a v D io A u G s r v o e u r n te d x. 𝑟 E − a 1 c , h re v p e r r e te se x n r t e e f d er a e s nc e e d s g m es u t l h ti a p t le en v c e o rt d ic e e t s h f e ro c m au t s h a e l
+4 1 dependencies between DAG vertices, forming a Directed Acyclic
+smaller than those
+in𝑜𝑖𝑠𝐶
+, any protocol satisfying Ordering Lin-
+4 Graph (DAG). The causal history of a DAG vertex includes all ver-
+earizability—suchasPompeandFairDAG-AB—mustplace𝑇 1 before tices reachable via the reference paths.
+𝑇 4 in the final ordering, regardless of the Byzantine replica’s input. Every𝑘 rounds (e.g.𝑘 = 2 in Tusk [24]), a random or predeter-
+mined leader vertex is elected. These leader vertices are committed
+2.3 𝛾-Batch-Order-Fairness
+in an ascending order of round, and their causal histories are com-
+In Section 2.1, we showed that it is impossible to guarantee Receive- mitted in a deterministic order. To ensure reliable dissemination,
+Order-FairnessinthepresenceofunknownByzantinereplicas.How- most DAG-based protocols employ reliable broadcast (RBC) mecha-
+ever, a weaker yet practical variant,𝛾-Batch-Order-Fairness, can be nisms. With RBC and carefully designed commit rules, DAG-based
+achieved by both Themis [44] and our protocol FairDAG-RL. protocols guarantee the following properties even in an asynchro-
+We say that a transaction𝑇 2 is dependent on transaction𝑇 1, nous network without message delay bound:
+denoted as𝑇 1 → 𝑇 2, if𝑇 1 must be ordered before𝑇 2 in the final • Agreement: If a correct replica commits a vertex 𝑣, then
+ordering.DuetothepresenceofCondorcetcycles,suchdependencies all correct replicas eventually commit 𝑣.
+can form cycles among transactions. • Total Order: If a correct replica commits 𝑣 before 𝑣′, then
+Definition 2.3. A batch𝑆 of transactions is cyclic dependent if for every correct replica commits 𝑣 before 𝑣′.
+a fo n r y m tw a o de t p ra e n n s d a e c n t c io y n p s a 𝑇 t 1 h ,𝑇 fr 2 o i m n𝑆 𝑇 , 1 t t h o e 𝑇 re 2. is a list of transactions that • V co a r l r i e d c i t ty re : p If li a ca c s or e r v e e c n t t r u e a p l l l i y ca co b m ro m ad it c 𝑣 as . ts a vertex 𝑣, then all
+Compared to consensus protocols with a single leader, the multi-
+The final ordering can be partitioned into a sequence of non-
+proposerdesignofDAG-basedprotocolsenableshigherthroughput.
+overlappingbatches𝑆 1 ,𝑆 2 ,...,whereeach𝑆 𝑖 isamaximalcyclically But this comes at the cost of higher commit latency due to the
+dependent batch, i.e., for any𝑖,𝑆 𝑖 ∪𝑆 𝑖+1 is not cyclically dependent. overhead of RBC and multi-round commit rules.
+We say that𝑇 1 is ordered no later than𝑇 2 if𝑇 1 is in the same
+or an earlier batch than𝑇 2. And we define𝛾-Batch-Order-Fairness 3 SYSTEM MODEL
+as follows:
+We consider a distributed system consisting of a set of replicas
+Definition 2.4. 𝛾-Batch-Order-Fairness. For any two transac- and a potentially unbounded number of clients. The system is
+tions𝑇 1 and𝑇 2, if at least a fraction 𝛾 of correct replicas receive subjecttoByzantinefaultsandoperatesundereitherasynchronous
+267
+
+===== PAGE 4 =====
+or partially synchronous network conditions. Our model covers 𝑇 →𝑇 →𝑇 →𝑇
+1 2 3 4 (f)
+clientbehavior,replicacorruption,authenticationassumptions,and
+FairnessLayer
+fairness-specific threat considerations.
+3.1 Clients 𝑑 𝑑 𝑑 𝑑 1 2 3 4 . . . . 𝐴 𝐴 𝐴 𝐴 𝑂 𝑂 𝑂 𝑂 𝐼 𝐼 𝐼 𝐼 𝑑1 𝑑2 𝑑 𝑑 3 4 (e)
+Clients issue transactions to replicas and wait for execution results.
+After𝐿1iscommitted: 𝐴1
+They may behave arbitrarily with no correctness assumptions. After𝐿3iscommitted: 𝐴3 (d)
+3.2 Replicas 𝐿𝑂1,1 𝐿𝑂1,2 𝐿𝑂1,3
+In the system, there are a total of n replicas and an adaptive adver-
+𝐿𝑂2,1 𝐿𝑂2,2 𝐿𝑂2,3
+sary capable of corrupting up to f replicas during execution. The (c)
+corrupted replicas, referred to as Byzantine or malicious replicas, 𝐿𝑂3,1 𝐿𝑂3,2 𝐿𝑂3,3
+may exhibit arbitrary malicious behavior.
+Regarding transaction ordering, Byzantine replicas may reorder
+𝐿𝑂4,1
+transactions in local orderings and ignore unfavorable local order-
+ings from other replicas. Correct replicas are honest about local DAGLayer (b)
+orderings in which the transactions are received.
+Fairness protocols differ in resilience to Byzantine faults. Specif-
+ically, FairDAG-AB and Pompe require n > 3f; Themis requires 𝑅 1 𝑅 2
+n > (2 2 𝛾 𝛾 + − 2 1 )f ; and FairDAG-RL requires n > (2 2 𝛾 𝛾 + − 1 1 )f , 1 2 < 𝛾 ≤ 1. 𝑣1,1 :𝐿𝑂1,1 𝑣1,3 :𝐿𝑂1,3 𝑣2,1 :𝐿𝑂2,1 𝑣2,3 :𝐿𝑂2,3
+𝑣1,2 :𝐿𝑂1,2 𝑣2,2 :𝐿𝑂2,2
+3.3 Authentication
+(a)
+We assume authenticated communication, where Byzantine replicas 𝑅 3 𝑅 4
+cannot forge messages from correct replicas. Authentication is
+enforced through Public Key Infrastructure (PKI) [42].
+𝐿𝑂3,1 :{𝑑3} 𝐿𝑂3,3 :{𝑑2} 𝐿𝑂4,1 :{𝑑1} 𝐿𝑂4,3 :{𝑑3}
+For integrity verification, each transaction𝑇 𝑖 is associated with 𝐿𝑂3,2 :{𝑑1,𝑑4} 𝐿𝑂4,2 :{𝑑4,𝑑2}
+a digest𝑑 𝑖, computed using a secure collision-resistant cryptographic
+hash function [42]. Figure 4: Architecture of FairDAG: (a) Replicas reliably
+broadcast blocks containing their local ordering fragments.
+3.4 Network (b) Each replica receives blocks delivered through Reliable
+Broadcast. (c) Each replica forms a local view of the DAG
+External network (client–replica). We make no assumptions
+using received blocks and reference links, where different
+about synchrony but assume the external network is
+colors represent the subdags of different committed leader
+non-adversarial. This assumption is necessary for preserving
+vertices. (d) Local orderings in subdag 𝐴 𝑟 are used as input
+fairness, as an adversarial external network could arbitrarily
+of the fairness layer after 𝐿 𝑟 is committed. (e) Finalize trans-
+control the order in which replicas receive transactions and then
+action ordering using absolute ordering mechanism (left) or
+the final ordering.
+relativeorderingmechanism(right),basedonthecommitted
+Internal network (replica–replica). The internal network may local orderings. (f) A final transaction ordering is generated.
+operate either asynchronously or partially synchronously:
+• Asynchronous network: Messages are never lost and are
+these problems, FairDAG runs fairness protocols on top of multi-
+eventually delivered, but there is no bound on the message
+proposer DAG-based consensus with two layers:
+delays.
+• Partially synchronous network: There exists an un- • DAG Layer handles the dissemination (Figure 4(a,b)) and
+knownGlobalStabilizationTime(GST) afterwhichthemes- commitment (Figure 4(c)) of local orderings.
+sage delays are bounded by a known constant Δ, i.e., any • Fairness Layer takes these committed local orderings (Fig-
+messagesentattime𝑡 willbedeliveredbymax(𝑡,GST)+Δ. ure 4(d)) as input to a transaction ordering algorithm (Fig-
+ure 4(e)) to produce a final ordering (Figure 4(f)).
+4 OVERVIEW
+4.1 DAG Layer
+Previous fairness protocols, such as Pompe [79] and Themis [44],
+TheDAGlayeradoptsexistingDAG-basedconsensusprotocols—such
+are built atop leader-based consensus. Although the final order-
+as Tusk [24], DAG-Rider [43], and Bullshark [63]—with minimal
+ing is derived from local orderings collected from a majority of
+modifications to support fairness guarantees.
+the replicas, existing fairness protocols have these problems: (1)
+Byzantine leaders manipulate orderings and compromise fairness Directed-Acylic-Graph
+by selectively picking up the local orderings. (2) Byzantine or slow DAG-based protocols proceed in rounds where each replica con-
+leaders can become system performance bottlenecks. To address currently proposes one vertex per round𝑟. Each vertex references
+268
+
+===== PAGE 5 =====
+previous vertices, forming a DAG, where references are edges. As shown in Figure 4(d), each time a leader 𝐿 𝑟 is committed, the
+Specifically, a vertex in round 𝑟 references at least n−f vertices fairness layer processes𝐴 𝑟 to compute the final ordering.
+from round𝑟 −1 via strong edges, and optionally up to f vertices The DAG layer satisfies a necessary condition to guarantee that
+from earlier rounds via weak edges. final ordering aligns with the preferences of the majority of correct
+Let 𝑣 𝑖,𝑟 denote the vertex proposed by replica 𝑅 𝑖 in round𝑟. A replicas, as each subdag𝐴 𝑟 aggregates local orderings from at least
+valid vertex satisfies: n−f replicas—guaranteeing the inclusion of at least n−2f correct
+• 𝑠𝑡𝑟𝑜𝑛𝑔_𝑒𝑑𝑔𝑒𝑠: includes at least n−f strong edges, replicas. (Note: n−2f ≥ n− 2 f holds for all protocols.)
+• 𝑤𝑒𝑎𝑘_𝑒𝑑𝑔𝑒𝑠: includes up to f weak edges.
+4.2 Fairness Layer
+Toguaranteethefairnesspropertiesinthepresenceofadversary,
+we extend existing DAG-based protocols by applying new rules of Taking local orderings within the committed subdags as input, the
+forming DAG vertices: fairness layer runs a transaction ordering algorithm to calculate
+(1) In FairDAG, replicas include weak edges in vertices to the final transaction ordering.
+incorporate local orderings from slower replicas, ensuring Inabsolutefairnessprotocols(Figure4(e),left),eachtransaction
+that all correct local orderings eventually get committed. gets an assigned ordering indicator (AOI) based on the input local
+(2) To preserve the integrity of a replica’s local ordering, each orderings. The final ordering (Figure 4(f)) is then derived, sorting
+vertex 𝑣 𝑖,𝑟 must include a strong edge to its vertex in the transactions by their AOI. FairDAG-AB is an absolute fairness
+previous round 𝑣 𝑖,𝑟−1 (for𝑟 > 0). protocols and satisfies the Ordering Linearizability property.
+In relative fairness protocols (Figure 4(e), right) construct a
+Figure 4(c) shows an DAG example where black arrows represent
+dependency graph of transaction nodes, where edges encode pair-
+strong edges, and blue arrows represent weak edges.
+wise ordering dependencies derived from the input local orderings.
+Reliably broadcasting a vertex
+The final ordering is a Hamiltonian path within the graph (Fig-
+Toaddressissue(1),inFairDAG,insteadofrelyingonaleaderto ure 4(f)). FairDAG-RL is an relative fairness protocol and satisfies
+collectlocalorderings,eachreplica𝑅 𝑖 autonomouslyreliablybroad- the𝛾-Batch-Order-Fairness property.
+cast [11, 19, 24, 29] its local ordering 𝐿𝑂 𝑖. As Figure 4(a) shows,
+FairDAG vertex 𝑣 𝑖,𝑟 contains 𝑟-th slice of the replica 𝑅 𝑖’s local 5 FAIRDAG-AB
+ordering (𝐿𝑂 𝑖,𝑟)—a sequence reflecting the order in which transac-
+tionswerereceivedbyreplica𝑅 𝑖.Eachlocalorderingisrepresented FairDAG-AB is an absolute fairness protocol. In this section, we
+demonstrate how FairDAG-AB calculates the assigned ordering
+as a sequence of transaction digests paired with monotonically
+indicator (AOI) for each transaction and orders the transactions
+increasing ordering indicators.
+based on the AOI values.
+Constructing a DAG
+AsillustratedinFigure4(a,b),theDAGlayerof FairDAGenables 5.1 Transaction Dissemination
+replicas to reliably broadcast and deliver vertices from one another.
+To prevent leader-driven manipulation, clients broadcast transac-
+This multi-proposer design alleviates the performance bottlenecks
+tions to all replicas. This prevents adversarial replicas from censor-
+associated with a single leader, thereby addressing issue (2).
+ing transactions to influence their position in final ordering.
+Usingthedeliveredverticesandthereferenceswithinthem,each
+Upon receiving a client transaction𝑇, replica 𝑅 gives𝑇 a mono-
+replicaconstructsitslocalviewoftheDAG,asshowninFigure4(c).
+tonically increasing ordering indicator𝑜𝑖 from its local timer, ap-
+As mentioned in Section 2.4, the DAG protocols guarantee that all
+pends digest𝑑 of𝑇 and𝑜𝑖 to its lists𝑑𝑔𝑠 and𝑜𝑖𝑠 (Figure 5, Line 4),
+correct replicas eventually have consistent DAG views.
+respectively, which are in-memory variables storing transaction
+Committing DAG vertices
+digestsandorderingindicatorsofpendingtransactions(Lines9-12).
+ThecommitrulesinDAG-basedconsensusprotocols—leveraging
+the causal dependencies between vertices—further mitigate leader 5.2 FairDAG-AB Vertex
+manipulation in selecting local orderings, addressing issue (1).
+Built atop a DAG-based consensus protocol, each FairDAG-AB
+DAG protocols group rounds into waves, each containing one
+replica constructs and reliably broadcasts a DAG vertex when pro-
+or more leader vertices. A leader vertex 𝐿 𝑟𝑖 in round 𝑟 𝑖 is com-
+tocol conditions are met. In addition to DAG-specific metadata (as
+mitted once specific conditions are met. Let𝐶 𝑟𝑖 denote its causal
+describedinSection4.1),aFairDAG-ABvertexincludes(andclears)
+history—the set of vertices reachable from 𝐿 𝑟𝑖 , including 𝐿 𝑟𝑖 itself.
+the replica’s local ordering of pending transactions it received after
+DAG protocols ensure that all correct replicas commit leader ver-
+it broadcast the last vertex, encoded in𝑑𝑔𝑠,𝑜𝑖𝑠 (Lines 13-17).
+ticesinaconsistent,round-increasingorder (𝐿 𝑟 ,𝐿 𝑟 ,...) suchthat
+1 2
+𝐶 𝑟𝑖 ⊂ 𝐶 𝑟𝑖+1 for all𝑖.
+5.3 Managing and Assigning Ordering
+𝑣 ∉ A 𝐶 v 𝑟𝑗 er f t o e r x a 𝑣 ll i 𝑗 s s < ai 𝑖 d . L to et b 𝐴 e 𝑟 i 𝑖 n d t e h n e o s te ub th d e ag ve o r f ti l c e e a s de in r 𝐿 th 𝑟𝑖 e i s f u 𝑣 bd ∈ a 𝐶 g 𝑟 o 𝑖 f a 𝐿 n 𝑟 d 𝑖 . Indicators
+The committed DAG can thus be partitioned into non-overlapping FairDAG-AB leverages local orderings within committed DAG
+subdags (𝐴 𝑟 ,𝐴 𝑟 ,...), each corresponding to a committed leader. vertices to determine the final transaction ordering. However, a
+1 2
+For example, in Figure 4(c), 𝐿 1 is the green vertex 𝑣 2,1 and 𝐿 3 is delayexistsbetweenreceivingandcommittingtheDAGvertices.To
+the blue vertex 𝑣 3,3. Then𝐴 1 consists of the green vertices, and𝐴 3 efficiently manage and utilize local orderings from both committed
+consists of the blue ones. and uncommitted vertices, FairDAG-AB maintains an Ordering
+269
+
+===== PAGE 6 =====
+1: StateVariables(perreplica) (𝑑 𝑣 1 1, , 1 1)
+2: txns_w_assigned_oi := {}
+3: ℎ𝑖𝑔ℎ𝑒𝑠𝑡_𝑜𝑖_𝑙𝑖𝑠𝑡[1..n] := 0
+4: 𝑑𝑔𝑠,𝑜𝑖𝑠 := [] (𝑑 𝑣 1 2, , 1 1) (𝑑 𝑣 2 2, , 2 2) (𝑑 𝑣 3 2, , 3 4) (𝑑 𝑣 5 2, , 4 5)
+5: 𝑐𝑢𝑟𝑟𝑒𝑛𝑡_𝑟𝑜𝑢𝑛𝑑,𝑟𝑒𝑝𝑙𝑖𝑐𝑎_𝑖𝑑 (𝑑4,3)
+6: OrderingIndicatorManager(𝑂𝐼𝑀) (𝑑 𝑣 2 3, , 1 1) (𝑑 𝑣 4 3, , 2 3) (𝑑 𝑣 3 3, , 3 4) (𝑑 𝑣 6 3, , 4 5)
+7: 𝑠𝑒𝑒𝑛_𝑜𝑖𝑠[1..n] := ∞, 𝑐𝑜𝑚𝑚𝑖𝑡𝑡𝑒𝑑_𝑜𝑖𝑠[1..n] := ∞ (𝑑1,2)
+8: 𝐿𝑃𝐴𝑂𝐼 := ∞, 𝐴𝑂𝐼 := ∞ 𝑣4,1 𝑣4,2 𝑣4,3 𝑣4,4
+(𝑑1,1) (𝑑3,3) (𝑑5,4) (𝑑4,5)
+ClientThread(processingclienttransactions):
+(𝑑2,2)
+9: eventOnreceivetransaction𝑇 do
+Figure 6: Example of calculating AOI and LPAOI.
+10: if𝑇 isvalidthen
+11: 𝑜𝑖 :=𝑙𝑜𝑐𝑎𝑙_𝑡𝑖𝑚𝑒𝑟
+12: 𝑑𝑔𝑠.𝑎𝑝𝑝𝑒𝑛𝑑(𝑇.𝑑𝑖𝑔𝑒𝑠𝑡);𝑜𝑖𝑠.𝑎𝑝𝑝𝑒𝑛𝑑(𝑜𝑖)
+a committed vertex. 𝑂𝐼𝑀(𝑑) contains the following information
+DAGLayerThread(constructingtheDAG): (Lines 6-8):
+13: eventOnproposeDAGvertexdo • 𝑠𝑒𝑒𝑛_𝑜𝑖𝑠: ordering indicators of𝑑 that 𝑅 has seen.
+14: 𝑣 := 𝐷𝐴𝐺𝑉𝑒𝑟𝑡𝑒𝑥(𝑟𝑒𝑝𝑙𝑖𝑐𝑎_𝑖𝑑,𝑐𝑢𝑟𝑟𝑒𝑛𝑡_𝑟𝑜𝑢𝑛𝑑) • 𝑐𝑜𝑚𝑚𝑖𝑡𝑡𝑒𝑑_𝑜𝑖𝑠: ordering indicators of𝑑 that𝑅 has commit-
+15: Addpendinglocalordering𝑑𝑔𝑠 and𝑜𝑖𝑠 into 𝑣 ted.
+16: Clear𝑑𝑔𝑠 and𝑜𝑖𝑠 • 𝐿𝑃𝐴𝑂𝐼: the lowest possible value of the assigned ordering
+17: Reliablybroadcast 𝑣 indicator of𝑑.
+18: eventOndeliver 𝑣𝑖,𝑟 do • 𝐴𝑂𝐼: the value of the assigned ordering indicator of𝑑.
+19: ℎ𝑖𝑔ℎ𝑒𝑠𝑡_𝑜𝑖_𝑙𝑖𝑠𝑡[𝑖] :=thehighest𝑜𝑖 in 𝑣𝑖,𝑟.𝑜𝑖𝑠 The final ordering is determined using𝐴𝑂𝐼 values derived from
+20: for (𝑑,𝑜𝑖) ∈ (𝑣𝑖,𝑟.𝑑𝑔𝑠,𝑣𝑖,𝑟.𝑜𝑖𝑠) do 𝑐𝑜𝑚𝑚𝑖𝑡𝑡𝑒𝑑_𝑜𝑖𝑠. 𝐿𝑃𝐴𝑂𝐼, computed from𝑠𝑒𝑒𝑛_𝑜𝑖𝑠, helps determine
+21: 𝑂𝐼𝑀(𝑑).𝑠𝑒𝑒𝑛_𝑜𝑖𝑠[𝑖] :=𝑜𝑖 when it is safe to decide the position of a transaction in the final
+ordering (see Section 5.4). The 𝑠𝑒𝑒𝑛_𝑜𝑖𝑠 and 𝑐𝑜𝑚𝑚𝑖𝑡𝑡𝑒𝑑_𝑜𝑖𝑠 are
+22: eventOncommit𝐿𝑟 do indexed from 1 to n and each item is initialized to ∞. For example,
+23: Send𝐴𝑟 toFairnessLayer if 𝑂𝐼𝑀(𝑑).𝑠𝑒𝑒𝑛_𝑜𝑖𝑠[2] = 3, it means that 𝑅 has seen an ordering
+FairnessLayerThread(Orderingtransactions):
+indicator 3 for the transaction with digest𝑑 from replica 𝑅 2.
+24: ⊲Update𝑐𝑜𝑚𝑚𝑖𝑡𝑡𝑒𝑑_𝑜𝑖𝑠 Managing Ordering Indicators
+25: eventOnreceive𝐴𝑟 do Besides the 𝑂𝐼𝑀 of each transaction digest 𝑑, each FairDAG-
+26: for 𝑣 ∈ 𝐴𝑟, (𝑑,𝑜𝑖) ∈ (𝑣.𝑑𝑔𝑠,𝑣.𝑜𝑖𝑠) do AB replica 𝑅 also maintains ℎ𝑖𝑔ℎ𝑒𝑠𝑡_𝑜𝑖𝑠: a vector of the highest
+27: 𝑂𝐼𝑀(𝑑).𝑐𝑜𝑚𝑚𝑖𝑡𝑡𝑒𝑑_𝑜𝑖𝑠[𝑣.𝑟𝑒𝑝𝑙𝑖𝑐𝑎_𝑖𝑑] :=𝑜𝑖 ordering indicators received from each replica, initialized to be 0
+28: 𝐿𝑃𝐴𝑂𝐼 min := ∞ andindexedfrom1ton(Line3).Thisvectorisessentialforchecking
+29: for𝑑 suchthat𝑂𝐼𝑀(𝑑) = ∞do
+whether it is safe to determine the position of a transaction in final
+30: if 𝑂𝐼𝑀(𝑑) hasatleastn − f 𝑐𝑜𝑚𝑚𝑖𝑡𝑡𝑒𝑑_𝑜𝑖𝑠 then
+31: ⊲Calculate𝐴𝑂𝐼 ordering (See details in Section 5.4).
+32: 𝑂𝐼𝑀(𝑑).𝐴𝑂𝐼 := (f+1)-thsmallestin𝑐𝑜𝑚𝑚𝑖𝑡𝑡𝑒𝑑_𝑜𝑖𝑠
+UponaDAGvertex𝑣
+𝑖,𝑟
+isdeliveredandaddedtoreplica𝑅’slocal
+33: Add𝑑 totxns_w_assigned_oi DAG view, 𝑅 updatesℎ𝑖𝑔ℎ𝑒𝑠𝑡_𝑜𝑖𝑠[𝑖] to the highest ordering indica-
+34: else tor in 𝑣 𝑖,𝑟. For each digest𝑑 in 𝑣 𝑖,𝑟, 𝑅 updates𝑂𝐼𝑀(𝑑).𝑠𝑒𝑒𝑛_𝑜𝑖𝑠[𝑖]
+35: ⊲Calculate𝐿𝑃𝐴𝑂𝐼 (Lines 18-21).
+36: for𝑖 = 1tondo UponaDAGleadervertex𝐿 𝑟 iscommitted,itssubdag𝐴 𝑟 isinput
+37: 𝑙𝑝_𝑜𝑖𝑠[𝑖] := min(𝑑.𝑠𝑒𝑒𝑛_𝑜𝑖𝑠[𝑖],ℎ𝑖𝑔ℎ𝑒𝑠𝑡_𝑜𝑖_𝑙𝑖𝑠𝑡[𝑖]) to the fairness layer (Lines 22-23). And 𝑅 updates𝑐𝑜𝑚𝑚𝑖𝑡𝑡𝑒𝑑_𝑜𝑖𝑠
+38: 𝑑.𝐿𝑃𝐴𝑂𝐼 := (f+1)-thsmallestin𝑙𝑝_𝑜𝑖𝑠 for the digests in𝐴 𝑟 accordingly (Lines 25-27).
+39: ⊲TracktheminimalLPAOIofalltransactionswithoutanAOI
+40: 𝐿𝑃𝐴𝑂𝐼 min := min(𝐿𝑃𝐴𝑂𝐼 min ,𝑑.𝐿𝑃𝐴𝑂𝐼) Calculating Assigned Ordering Indicator
+41: sorttxns_w_assigned_oisortedby𝐴𝑂𝐼 If𝑂𝐼𝑀(𝑑) has at least n−f non-∞𝑐𝑜𝑚𝑚𝑖𝑡𝑡𝑒𝑑_𝑜𝑖 values 𝑅 calcu-
+42: executealltransactionswithan𝐴𝑂𝐼 lowerthan𝐿𝑃𝐴𝑂𝐼𝑚𝑖𝑛 lates 𝑂𝐼𝑀(𝑑).𝐴𝑂𝐼. The 𝐴𝑂𝐼 is the (f+1)-th smallest value of the
+𝑐𝑜𝑚𝑚𝑖𝑡𝑡𝑒𝑑_𝑜𝑖𝑠, which definitely falls within the range of ordering
+Figure 5: FairDAG-AB Algorithm. indicatorsfromcorrectreplicas.Then,𝑑 isaddedtotxns_w_assigned_oi,
+which is set of transactions digests with valid𝐴𝑂𝐼 values (Lines 29-
+33). Note: The value of 𝐴𝑂𝐼 is immutable once calculated, even if
+more ordering indicators of𝑑 are committed.
+Indicator Manager (𝑂𝐼𝑀(𝑑)) for each transaction digest𝑑, which
+tracks the replica’s local view of the DAG and ordering indicators Example 5.1. Figure 6 illustrates how to calculate 𝐴𝑂𝐼 values.
+within the vertices. Suppose𝑣 4,2 and𝑣 3,4 are committed leader vertices 𝐿 2 and 𝐿 4, with
+We say that a replica 𝑅 has seen an ordering indicator𝑜𝑖 if𝑜𝑖 is yellow𝐴 2 andgreen𝐴 4,respectively.In𝐴 2,digest𝑑 1 hascommitted
+in a vertex in 𝑅’s local DAG view. 𝑅 has committed 𝑜𝑖 if 𝑜𝑖 is in ordering indicators ∞,1,2,1. Since this includes at least n−f valid
+270
+
+===== PAGE 7 =====
+values, its𝐴𝑂𝐼 is the (f+1)-th lowest, which is 1 (Lines 29-33). Al- 1: StateVariables
+thoughanadditional𝑠𝑒𝑒𝑛_𝑜𝑖𝑠 of1appearsin𝑣 1,1 ∈ 𝐴 4,itisignored 2: 𝑔𝑟𝑎𝑝ℎ𝑠 := []
+since 𝐴𝑂𝐼 is immutable once calculated after 𝐿 2 is committed. In 3: 𝑐𝑢𝑟𝑟𝑒𝑛𝑡_𝑟𝑜𝑢𝑛𝑑,𝑟𝑒𝑝𝑙𝑖𝑐𝑎_𝑖𝑑
+𝐴 4, digest𝑑 2 has committed ordering indicators ∞,1,2,3, yielding 4: 𝑐𝑜𝑢𝑛𝑡𝑒𝑟 := 0
+an𝐴𝑂𝐼 of 2. Similarly,𝑑 3 receives an𝐴𝑂𝐼 of 3. Other digests in𝐴 4
+lack sufficient𝑐𝑜𝑚𝑚𝑖𝑡𝑡𝑒𝑑_𝑜𝑖𝑠 data for𝐴𝑂𝐼. ClientThread(processingtransactionsfromclients):
+5: eventOnreceiveatransaction𝑇 do
+5.4 Global Ordering 6: if𝑇 isvalidthen
+7: 𝑐𝑜𝑢𝑛𝑡𝑒𝑟 :=𝑐𝑜𝑢𝑛𝑡𝑒𝑟 +1
+8: 𝑜𝑖𝑠.𝑎𝑝𝑝𝑒𝑛𝑑(𝑐𝑜𝑢𝑛𝑡𝑒𝑟), 𝑑𝑔𝑠.𝑎𝑝𝑝𝑒𝑛𝑑(𝑇.𝑑𝑖𝑔𝑒𝑠𝑡)
+Due to the randomness in message arrival times, DAG vertices
+with smaller local ordering indicators may be committed later than DAGLayerThread(formingtheDAG):
+vertices from other replicas with higher ordering indicators. As a
+9: eventOnproposevertexdo
+result, a transaction𝑑 1 may get a smaller 𝐴𝑂𝐼 than𝑑 2, even if𝑑 1 10: 𝑣 := 𝐷𝐴𝐺𝑉𝑒𝑟𝑡𝑒𝑥(𝑟𝑒𝑝𝑙𝑖𝑐𝑎_𝑖𝑑,𝑐𝑢𝑟𝑟𝑒𝑛𝑡_𝑟𝑜𝑢𝑛𝑑)
+obtains its𝐴𝑂𝐼 in a later round than𝑑 2. To ensure strict ordering 11: Addpendinglocalordering𝑑𝑔𝑠 and𝑜𝑖𝑠 into 𝑣
+of transactions based on their 𝐴𝑂𝐼 values—which is essential for 12: Clear𝑑𝑔𝑠 and𝑜𝑖𝑠
+achievingOrderingLinearizability—itisnecessarytoguaranteethat 13: Reliablybroadcast 𝑣
+no other transaction could get a lower𝐴𝑂𝐼 before determining the
+positionofatransactioninthefinalordering.Toenforceit,foreach 14: eventOncommit(𝐿𝑟)do
+transactionwithoutan𝐴𝑂𝐼,wecalculateits𝐿𝑃𝐴𝑂𝐼,thelowestAOI 15: Send𝐴𝑟 toOrderingLayer
+value it could possibly get. And we track 𝐿𝑃𝐴𝑂𝐼 𝑚𝑖𝑛, the minimal
+𝐿𝑃𝐴𝑂𝐼 of transactions without an𝐴𝑂𝐼. Figure 7: FairDAG-RL: Transaction dissemination and DAG
+vertex proposal.
+Calculating LPAOI
+For each transaction digest𝑑 without a valid𝐴𝑂𝐼, replica 𝑅 con-
+structsavector𝑙𝑝_𝑜𝑖𝑠,whereeachentryiscomputedas𝑙𝑝_𝑜𝑖𝑠[𝑖] = The local orderings in subdag 𝐴 𝑟 will be input to the fairness
+min(𝑂𝐼𝑀(𝑑).𝑠𝑒𝑒𝑛_𝑜𝑖𝑠[𝑖],ℎ𝑖𝑔ℎ𝑒𝑠𝑡_𝑜𝑖𝑠[𝑖]). The 𝐿𝑃𝐴𝑂𝐼 of𝑑 is then layer after 𝐿 𝑟 is committed in FairDAG-RL (Lines 14-15).
+defined as the (f+1)-th smallest value in𝑙𝑝_𝑜𝑖𝑠. And 𝐿𝑃𝐴𝑂𝐼 min is
+the minimal value across all 𝐿𝑃𝐴𝑂𝐼 values (Lines 34-40). 6.2 Dependency Graph Construction
+𝐿𝑃𝐴𝑂𝐼 min serves as a threshold: only transactions with𝐴𝑂𝐼 < The fairness layer of FairDAG-RL utilizes local orderings in com-
+𝐿𝑃𝐴𝑂𝐼 min can determine its position in final ordering. The fairness mitted DAG vertices to construct dependency graphs that reflect
+layer sorts all digests in txns_w_assigned_oi by 𝐴𝑂𝐼, executes all
+the ordering preferences of replicas. Every time a leader vertex is
+transactions with an 𝐴𝑂𝐼 lower than the threshold. The ordered
+committed, a new dependency graph is constructed:
+digests are then removed from txns_w_assigned_oi (Lines 41-42). First, transaction digests from𝐴 𝑟 are added as graph nodes if it
+Example5.2. AsshowninFigure6,transactiondigests𝑑 1,𝑑 2,and has not been added to any dependency graph is previously rounds.
+𝑑 3 have𝐴𝑂𝐼 values of 1, 2, and 4, respectively. Givenℎ𝑖𝑔ℎ𝑒𝑠𝑡_𝑜𝑖𝑠 = Each transaction digest𝑑 is associated with a node that stores:
+(2,6,6,6) and𝑂𝐼𝑀(𝑑 4 ).𝑠𝑒𝑒𝑛_𝑜𝑖𝑠 = (∞,3,3,5), digest𝑑 4 derives its • 𝑡𝑦𝑝𝑒: the type of the transaction node (See details later in
+𝑙𝑝_𝑜𝑖𝑠 = (2,3,3,5) and obtains 𝐿𝑃𝐴𝑂𝐼 = 3. Similarly, 𝑑 5 and 𝑑 6 Adding nodes)
+have 𝐿𝑃𝐴𝑂𝐼 values of 4 and 5. 𝐿𝑃𝐴𝑂𝐼 min is then 3, (Lines 34-40) so • 𝑐𝑜𝑚𝑚𝑖𝑡𝑡𝑒𝑑_𝑜𝑖𝑠: a vector of committed ordering indicators
+𝑑 1 and𝑑 2 can be ordered and executed. In contrast,𝑑 3 cannot be for𝑑.
+executed since its𝐴𝑂𝐼 exceeds 𝐿𝑃𝐴𝑂𝐼 min, implying that𝑑 4 could • 𝑐𝑜𝑚𝑚𝑖𝑡𝑡𝑒𝑑_𝑟𝑜𝑢𝑛𝑑𝑠:theroundsinwhichthecorresponding
+possibly get a lower𝐴𝑂𝐼 than𝑑 3. 𝑐𝑜𝑚𝑚𝑖𝑡𝑒𝑑_𝑜𝑖 is committed.
+• 𝐺: the graph to which the node is added.
+6 FAIRDAG-RL
+Second, pairwise ordering preferences are aggregated into a
+weight function: 𝑤𝑒𝑖𝑔ℎ𝑡(𝑑 1 ,𝑑 2 ) denotes the number of replicas
+FairDAG-RL is a relative fairness protocol. In this section, we who have a lower𝑐𝑜𝑚𝑚𝑖𝑡𝑡𝑒𝑑_𝑜𝑖 for𝑑 1 than𝑑 2. Each dependency
+demonstratehowtoconstructdependencygraphsbetweentransac-
+graph contains the following information:
+tions and derive a final transaction ordering from the dependency
+• 𝑛𝑜𝑑𝑒𝑠: the set of transaction digest nodes.
+graphs.
+• 𝑤𝑒𝑖𝑔ℎ𝑡 : mapping of the pairs of nodes to their weights.
+• 𝑒𝑑𝑔𝑒𝑠: directed edges representing inferred ordering con-
+6.1 Transaction Dissemination
+straints between the transaction digest nodes.
+As in FairDAG-AB, clients broadcast transactions to all replicas
+for censorship resistance. Upon meeting the conditions in DAG Third, a directed edge from 𝑑 1 to 𝑑 2 is added if 𝑤𝑒𝑖𝑔ℎ𝑡(𝑑 1 ,𝑑 2 )
+exceeds a quorum-based threshold n−f and is not lower than
+protocols,eachreplicabroadcastsavertex.AFairDAG-RLvertexis 2
+a restrictedform ofa FairDAG-ABvertex:it includes asequence of
+𝑤𝑒𝑖𝑔ℎ𝑡(𝑑
+2
+,𝑑
+1
+).
+incrementing counter values as ordering indicators corresponding Thresholds
+toreceivedtransactions(Figure7Lines7-8).Forsimplicity,weomit To construct a dependency graph that reflects the ordering pref-
+the ordering indicators in Figure 9. erences of the majority and mitigates manipulation by Byzantine
+271
+
+===== PAGE 8 =====
+replicas,relativefairnessprotocolsshouldleverageasmanycorrect FairnessLayerThread(OrderingTransactions):
+local orderings as possible. Prior protocols such as Themis [44] and 1: eventOnreceive𝐴𝑟 do
+Rashnu[53]relyonasingleleadertocollectlocalorderings,where 2: 𝐺𝑟 := 𝑁𝑒𝑤𝐺𝑟𝑎𝑝ℎ(), 𝑔𝑟𝑎𝑝ℎ𝑠.𝑝𝑢𝑠ℎ(𝐺𝑟)
+a Byzantine leader may intentionally exclude local orderings from 3: ⊲Findnodesupdatedwith𝐴𝑟
+up to f correct replicas. As a result, a transaction may appear in at 4: 𝑢𝑝𝑑𝑎𝑡𝑒𝑑_𝑛𝑜𝑑𝑒𝑠 := {}
+most n−2f committed local orderings if Byzantine replicas ignore 5: for 𝑣 ∈ 𝐴𝑟 do
+the transaction and the Byzantine leader excludes f correct local 6: 𝑖 := 𝑣.𝑟𝑒𝑝𝑙𝑖𝑐𝑎_𝑖𝑑
+7: for (𝑑,𝑜𝑖) ∈ (𝑣.𝑑𝑔𝑠,𝑣.𝑜𝑖𝑠) do
+orderings, increasing both the susceptibility to ordering manipu-
+8: 𝑛𝑜𝑑𝑒(𝑑).𝑐𝑜𝑚𝑚𝑖𝑡𝑡𝑒𝑑_𝑜𝑖𝑠[𝑖] :=𝑜𝑖
+lation and the minimal requirement of number of correct replicas
+9: 𝑛𝑜𝑑𝑒(𝑑).𝑐𝑜𝑚𝑚𝑖𝑡𝑡𝑒𝑑_𝑟𝑜𝑢𝑛𝑑𝑠[𝑖] :=𝑟
+(see Section 7 for details). 10: 𝑢𝑝𝑑𝑎𝑡𝑒𝑑_𝑛𝑜𝑑𝑒𝑠.𝑖𝑛𝑠𝑒𝑟𝑡(𝑑)
+In contrast, DAG-based consensus protocols ensure that all cor- 11: ⊲Updatenodetypesandaddnewnon-blanknodesto𝐺𝑟
+rect local orderings are eventually committed. This guarantees that 12: for𝑑 ∈ 𝑢𝑝𝑑𝑎𝑡𝑒𝑑_𝑛𝑜𝑑𝑒𝑠 do
+each transaction can appear in at least n − f committed local or- 13: if 𝑛𝑜𝑑𝑒(𝑑).𝑡𝑦𝑝𝑒 =𝑏𝑙𝑎𝑛𝑘 then
+derings. Consequently, FairDAG-AB raises the thresholds used in 14: Let𝑎𝑝(𝑑,𝑟) be the number of ordering indicators for𝑑 that
+the construction of dependency graphs from n−2f and n−2f (used arecommittedbyround𝑟
+in Themis and Rashnu) to n − f and n−f, respectively. 2 We will 15: if 𝑎𝑝(𝑑,𝑟) ≥ n − f then
+2 16: 𝑛𝑜𝑑𝑒(𝑑).𝑡𝑦𝑝𝑒 :=𝑠𝑜𝑙𝑖𝑑; 𝐺𝑟.𝑛𝑜𝑑𝑒𝑠.𝑎𝑑𝑑(𝑛𝑜𝑑𝑒(𝑑))
+elaborate on the details below. 17: elseif 𝑎𝑝(𝑑,𝑟) ≥ n−f then
+2
+Adding nodes 18: 𝑛𝑜𝑑𝑒(𝑑).𝑡𝑦𝑝𝑒 :=𝑠ℎ𝑎𝑑𝑒𝑑; 𝐺𝑟.𝑛𝑜𝑑𝑒𝑠.𝑎𝑑𝑑(𝑛𝑜𝑑𝑒(𝑑))
+For each transaction digest 𝑑 in 𝐴 𝑟, let 𝑛𝑜𝑑𝑒(𝑑) represent its 19: ⊲Findallcandidateedgesinallexistinggraphs𝐺𝑟
+dependencygraphnode.Its𝑐𝑜𝑚𝑚𝑖𝑡𝑡𝑒𝑑_𝑜𝑖𝑠 and𝑐𝑜𝑚𝑚𝑖𝑡𝑡𝑒𝑑_𝑟𝑜𝑢𝑛𝑑𝑠 20: 𝑎𝑑𝑑𝑎𝑏𝑙𝑒_𝑒𝑑𝑔𝑒𝑠 := {}
+are updated using information contained in 𝐴 𝑟, and the node is 21: for 𝑣 ∈ 𝐴𝑟 do
+addedto𝑢𝑝𝑑𝑎𝑡𝑒𝑑_𝑛𝑜𝑑𝑒𝑠,asetoftransactionswhose𝑐𝑜𝑚𝑚𝑖𝑡𝑡𝑒𝑑_𝑜𝑖𝑠 22: 𝑖 := 𝑣.𝑟𝑒𝑝𝑙𝑖𝑐𝑎_𝑖𝑑
+are updated because of𝐴 𝑟 (Figure 8 Lines 3-10) 2. 2 2 3 4 : : for 𝐺 ( ′ 𝑑 : , = 𝑜𝑖 𝑛 ) 𝑜𝑑 ∈ 𝑒 ( ( 𝑣 𝑑 .𝑑 ). 𝑔 𝐺 𝑠,𝑣.𝑜𝑖𝑠) do
+Then, we check if any transaction digests can be added as nodes 25: 𝑑_𝑜𝑖 :=𝑛𝑜𝑑𝑒(𝑑).𝑐𝑜𝑚𝑚𝑖𝑡𝑡𝑒𝑑_𝑜𝑖𝑠[𝑖]
+intothenewdependencygraphofround𝑟.Wedefine𝑎𝑝(𝑑,𝑟) asthe 26: for𝑛𝑜𝑑𝑒(𝑑 2 ) ∈ 𝐺′.𝑛𝑜𝑑𝑒𝑠 do
+number of ordering indicators for𝑑 that are committed by round𝑟: 27: if 𝑑_𝑜𝑖 < 𝑛𝑜𝑑𝑒(𝑑 2 ).𝑐𝑜𝑚𝑚𝑖𝑡𝑡𝑒𝑑_𝑜𝑖𝑠[𝑖] then
+𝑎𝑝(𝑑,𝑟) := |{𝑖|𝑛𝑜𝑑𝑒(𝑑).𝑐𝑜𝑚𝑚𝑖𝑡𝑡𝑒𝑑_𝑟𝑜𝑢𝑛𝑑𝑠[𝑖] ≤ 𝑟}| 28: increment𝐺′.𝑤𝑒𝑖𝑔ℎ𝑡[(𝑑,𝑑 2 )]
+Each node in𝑢𝑝𝑑𝑎𝑡𝑒𝑑_𝑛𝑜𝑑𝑒𝑠 whose type is𝑏𝑙𝑎𝑛𝑘, which means 29: else
+that it has not been added into any dependency graph previously, 30: increment𝐺′.𝑤𝑒𝑖𝑔ℎ𝑡[(𝑑 2 ,𝑑)]
+31: if eitherweightreachesthreshold n−f then
+is classified as: 32: 𝑎𝑑𝑑𝑎𝑏𝑙𝑒_𝑒𝑑𝑔𝑒𝑠.𝑖𝑛𝑠𝑒𝑟𝑡(𝑑,𝑑 2 ) 2
+• 𝑠𝑜𝑙𝑖𝑑, if𝑎𝑝(𝑑,𝑟) ≥ n−f. 33: ⊲Addedgeifweightreachesthreshold
+• 𝑠ℎ𝑎𝑑𝑒𝑑, if n− 2 f ≤ 𝑎𝑝(𝑑,𝑟) < n−f. 34: for (𝑑,𝑑 2 ) ∈ 𝑎𝑑𝑑𝑎𝑏𝑙𝑒_𝑒𝑑𝑔𝑒𝑠 do
+• 𝑏𝑙𝑎𝑛𝑘, if𝑎𝑝(𝑑,𝑟) < n−f. 35: 𝐺 :=𝑛𝑜𝑑𝑒(𝑑).𝐺
+fica T t h io e n w is e o a n dd ly th ap e p n l o ie n d -b t l o an p k re n 2 v o io d u es sl t y o 𝑏 𝐺 𝑙𝑎 𝑟 𝑛 ( 𝑘 Li n n o es de 1 s 1 , -1 it 8 i ) s . S g i u n a c r e a c n l t a e s e s d i- 3 3 7 6 : : if 𝐺 𝐺 . . 𝑤 𝑒𝑑 𝑒 𝑔 𝑖𝑔 𝑒 ℎ 𝑠. 𝑡 𝑎 [ 𝑑 ( 𝑑 𝑑, ( 𝑑 𝑒 2 (𝑑 )] ,𝑑 ≥ 2 ) 𝐺 ) .𝑤𝑒𝑖𝑔ℎ𝑡[(𝑑 2 ,𝑑)] then
+38: else
+that each digest is inserted into at most one dependency graph. 39: 𝐺.𝑒𝑑𝑔𝑒𝑠.𝑎𝑑𝑑(𝑒(𝑑 2 ,𝑑))
+Updating weights between nodes 40: ⊲FinalizeTransactionOrderingin𝐺𝑟 when𝐺𝑟 isatournament
+Afterclassifyingandaddingnodesto𝐺 𝑟,weupdateedgeweights 41: OrderFinalization()
+basedonlocalorderingsin𝐴 𝑟.Verticesin𝐴 𝑟 areprocessedinround-
+Figure 8: Dependency graph construction in FairDAG-RL.
+increasing order.
+For each vertex 𝑣 from replica 𝑅 𝑖, we iterate through the trans-
+action digests in 𝑣.𝑑𝑔𝑠. For each digest 𝑑, we compare the value
+of 𝑛𝑜𝑑𝑒(𝑑).𝑐𝑜𝑚𝑚𝑖𝑡𝑡𝑒𝑑_𝑜𝑖𝑠[𝑖] with all other nodes in the graph𝐺 Adding edges
+of𝑛𝑜𝑑𝑒(𝑑). For each pair (𝑑,𝑑 2 ), we increment𝐺.𝑤𝑒𝑖𝑔ℎ𝑡[(𝑑,𝑑 2 )] For each pair (𝑑,𝑑 2 ) ∈ 𝑎𝑑𝑑𝑎𝑏𝑙𝑒_𝑒𝑑𝑔𝑒𝑠, if there is no edge be-
+if𝑛𝑜𝑑𝑒(𝑑).𝑐𝑜𝑚𝑚𝑖𝑡𝑡𝑒𝑑_𝑜𝑖𝑠[𝑖] < 𝑛𝑜𝑑𝑒(𝑑 2 ).𝑐𝑜𝑚𝑚𝑖𝑡𝑡𝑒𝑑_𝑜𝑖𝑠[𝑖]; other- tween𝑛𝑜𝑑𝑒(𝑑) and𝑛𝑜𝑑𝑒(𝑑 2 ),anedgeisaddedbasedonthemajority
+wise, we increment𝐺.𝑤𝑒𝑖𝑔ℎ𝑡[(𝑑 2 ,𝑑)] (Lines 21-30). preference (Lines 33-39):
+Duringthisprocess,wemaintainaset𝑎𝑑𝑑𝑎𝑏𝑙𝑒_𝑒𝑑𝑔𝑒𝑠 totrackthe • If𝐺.𝑤𝑒𝑖𝑔ℎ𝑡[(𝑑,𝑑
+2
+)] ≥ 𝐺.𝑤𝑒𝑖𝑔ℎ𝑡[(𝑑
+2
+,𝑑)],addedge𝑒(𝑑,𝑑
+2
+)
+edgesthatcanbeaddedtothedependencygraph.If𝐺.𝑤𝑒𝑖𝑔ℎ𝑡[(𝑑,𝑑 2 )] from𝑛𝑜𝑑𝑒(𝑑) to𝑛𝑜𝑑𝑒(𝑑 2 ) ;
+or𝐺.𝑤𝑒𝑖𝑔ℎ𝑡[(𝑑 2 ,𝑑)] reaches the threshold n− 2 f, the corresponding • Otherwise, add edge𝑒(𝑑 2 ,𝑑) from𝑛𝑜𝑑𝑒(𝑑 2 ) to𝑛𝑜𝑑𝑒(𝑑).
+pair is added to𝑎𝑑𝑑𝑎𝑏𝑙𝑒_𝑒𝑑𝑔𝑒𝑠 (Lines 31-32).
+Example 6.1. Figure 9 illustrates how FairDAG-RL constructs
+dependency graphs. In Figure 9(a), after processing𝐴 2, graph𝐺 2
+contains six nodes. Nodes𝑑 0,𝑑 1,𝑑 2, and𝑑 4 are classified as solid
+2 th A a l t lo ar p e er n a o ti t o o n r s d r e e r l e a d te y d et t . o W de e p o e m nd it en th c i y s g fo ra r p s h im c p o l n ic st it r y uc i t n io t n he on pr ly ot a o p c p o l l y d t e o sc tr r a ip n t s i a o c n ti a o n n d s (solid circles), while𝑑 3 and𝑑 5 are shaded (dashed circles). All node
+thepseudocode. pairs form edges except (𝑑 3 ,𝑑 5 ), as neither 𝐺 2 .𝑤𝑒𝑖𝑔ℎ𝑡[(𝑑 3 ,𝑑 5 )]
+272
+
+===== PAGE 9 =====
+𝑅 1 : {𝑑 0 ,𝑑 1 ,𝑑 2 ,𝑑 5 ,𝑑 3 } 𝑅 1 : {𝑑 4 ,𝑑 6 } onlytransactionswhose𝐴𝑂𝐼 fallwithinthecorrespondinginterval
+𝑅 2 : {𝑑 0 ,𝑑 2 ,𝑑 3 ,𝑑 4 ,𝑑 5 } 𝑅 2 : {𝑑 1 ,𝑑 6 } tobeexecuted,increasingtheoverheadofrecoverywhentheleader
+𝐴 2 : 𝑅 3 : {𝑑 0 ,𝑑 4 ,𝑑 1 ,𝑑 6 } 𝐴 4 : 𝑅 3 : {𝑑 3 ,𝑑 2 ,𝑑 5 ,𝑑 7 } f s a in il g s l . e A r d ep d l i i t c i a on in a s ll t y e , ad in o P f o be m i p n e g , b e r a o c a h dc c a li s e t, n m t t a r k a i n n s g a t c h t e io p n ro is to s c e o n l t m t o o r a e
+𝑅 4 : {𝑑 0 ,𝑑 4 ,𝑑 1 ,𝑑 2 } 𝑅 4 : {𝑑 3 ,𝑑 5 ,𝑑 6 ,𝑑 7 } susceptible to transaction censorship.
+After processing𝐴 2: After processing𝐴 4:
+7.2 Adversarial Manipulation
+𝐺 2: 𝑑1 𝐺 2: 𝑑1 𝐺 4:
+We now analyze how an adversary can manipulate transaction
+ordering in Pompe and Themis by selectively collecting local order-
+𝑑2 𝑑2
+𝑑0 𝑑5 𝑑0 𝑑5 𝑑6 𝑑7 ings.Additionally,wedemonstratehowFairDAG-ABandFairDAG-
+𝑑3 𝑑3 RL mitigate these vulnerabilities, ensuring more resilient and fair
+transaction orderings.
+𝑑4 𝑑4
+Pompe vs FairDAG-AB
+(a) (b)
+In Pompe, a Byzantine replica who is responsible for collect-
+Figure 9: Constructing dependency graphs with n = 4,𝛾 = ing ordering indicators can selectively choose n−f local ordering
+1,f = 1. indicators to calculate an assigned ordering indicator. This selec-
+tive collection allows the adversary to manipulate the ordering of
+transactions whose ranges of correct ordering indicators overlap.
+nor 𝐺 2 .𝑤𝑒𝑖𝑔ℎ𝑡[(𝑑 5 ,𝑑 3 )] reaches the threshold n− 2 f = 3 2 . In Fig- Furthermore, if at most f correct replicas have received the as-
+ure 9(b), after processing𝐴 4,𝐺 4 is constructed with two additional signed ordering indicator for a transaction𝑇 before a Byzantine
+nodes, and an edge between𝑛𝑜𝑑𝑒(𝑑 3 ) and𝑛𝑜𝑑𝑒(𝑑 5 ) is added once leader replica collects assigned ordering indicators for a new block,
+𝐺 2 .𝑤𝑒𝑖𝑔ℎ𝑡[(𝑑 3 ,𝑑 5 )] reaches the threshold. theleadercanexclude𝑇 fromthenewblock.Sincetheleaderisonly
+required to collect from n−f replicas, it can selectively collect from
+6.3 Ordering Finalization n−f replicas that have not received𝑇, thus delaying the position of
+FairDAG-RL finalizes the ordering of transactions within a de- 𝑇 in the final ordering.
+pendency graph after it becomes a tournament. A tournament is a In FairDAG-AB, the client broadcasts its transaction to all repli-
+dependency graph such that there is an edge between each pair of cas, and each replica independently broadcasts its ordering indica-
+transaction nodes in the dependency graph. When finalizing the or- tors. The Validity property and the round-robin or random leader
+dering,FairDAG-RLcondensesthedependencygraphintomultiple rotation of the underlying DAG protocols guarantees that reduce
+Strongly Connected Components (SCCs) and generates a topological the chance of selective collection of ordering indicators by Byzan-
+sorting of them. Transactions that are sorted behind the last SCC tine replicas. Thus, FairDAG-AB is more resilient against ordering
+containing at least one solid transaction will be readded into later manipulation than Pompe.
+dependency graphs, as they might be dependent on some transac- Additionally, Pompe effectively mitigates the transaction cen-
+tions in later dependency graphs (see more detailed explanation in sorship issue mentioned in Section 7.1, because transactions are
+Section 8.4 of our extended report [39].) broadcast to all replicas, and each replica independently generates
+As we use the same algorithm to finalize transaction ordering and broadcasts its local ordering indicators.
+within tournaments as Themis, we put the detailed algorithm in
+Themis vs FairDAG-RL
+Section 6.3 our extended report [39].
+In Themis, if a Byzantine leader ignore f correct local orderings
+7 COMPARING FAIRNESS PROTOCOLS containingtransaction𝑇 andtheByzantinereplicasexclude𝑇 from
+their local orderings, there would be at most n−2f local orderings
+Inthissection,wedemonstratehowFairDAG-ABandFairDAG- containing𝑇.Thus,thethresholdofdecidingedgedirectionis n−2f
+2
+RL outperform Pompe [79] and Themis [44] in limiting the adver- in Themis. To guarantee the𝛾-Batch-Order-Fairness, it is required
+sary’s manipulation of transaction ordering. We achieve this by that the votes of the opposite direction cannot reach the threshold,
+comparing how these protocols perform under adversarial condi- containing f votes from Byzantine replicas and (1−𝛾)(n−f) votes
+tions, such as those caused by Byzantine replicas or an asynchro- from correct replicas. That is, f + (1−𝛾)(n−f) < n−2f, i.e., n >
+2
+nous network. f( 2 2 𝛾 𝛾 − + 1 2) . When𝛾 = 1, Themis requires n > 4f.
+7.1 Pompe and Themis In FairDAG-RL, due to the Validity of DAG-based consensus
+protocols, all local orderings from correct replicas will eventually
+PompeandThemisrunfairnessprotocolsatopleader-basedconsen-
+be committed by all replicas. Then, for each transaction, there are
+sus protocols such as PBFT [20] and HotStuff [74], where a single
+at least n−f local orderings containing it. Thus, the threshold for
+leader is responsible for collecting local orderings from a quorum deciding edge direction is n−f in Themis. Then, to guarantee the
+of n−f replicas. 2
+𝛾-Batch-Order-Fairness, it is required that f + (1−𝛾)(n−f) < n−f,
+Beyond the difference in underlying consensus protocols, Pompe 2
+assigns non-overlapping intervals to consensus rounds, allowing i.e., n > f( 2 2 𝛾 𝛾 − + 1 1) . When𝛾 = 1, FairDAG-RL requires n > 3f.
+273
+
+===== PAGE 10 =====
+7.3 Leader Crash and Asynchronous Network Pbft RCC Tusk Pompe
+FairDAG-AB Themis FairDAG-RL
+In Pompe and Themis, if the leader crashes, a recovery subprocess
+1.1
+must be initiated to replace the leader with a new one, introduc- 1.0
+ing an additional delay of 𝑂(Δ) before the protocol can resume 0 0 . . 8 9
+0.7
+normal operation. Moreover, in Pompe, each round corresponds 0.6
+0.5
+to a distinct, non-overlapping time slot. If the designated leader 0.4
+0.3
+crashes, transactions with assigned ordering indicators that fall 0.2
+0.1
+within that time slot cannot be ordered or executed, resulting in 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1 1.1
+a potential transaction loss or indefinite delays. In Themis, if the Throughput(txn/s) ·106
+leader crashes, replicas have to resend their local orderings to the
+new leader, resulting in additional communication overhead.
+If the network operates under asynchronous conditions where
+messages can experience indefinite delays, additional overhead
+will be introduced, similar to the overhead incurred during leader
+crashes.
+FairDAG-AB and FairDAG-RL address the aforementioned is-
+sues through the multi-proposer design and the Reliable Broadcast
+inherent to DAG-based consensus protocols, which ensures that
+each correct local ordering eventually deliviers and commits even
+in asynchronous settings.
+8 EVALUATION
+We evaluate FairDAG-AB and FairDAG-RL by comparing their
+performance with other baseline protocols. We implemented the
+protocols [38] in Apache ResilientDB (Incubating) [2, 33]. Apache
+ResilientDB is an open-source incubating blockchain project that
+supports various consensus protocols. It provides a fair comparison
+of each protocol by offering a high-performance framework. Re-
+searchers can focus solely on their protocols without considering
+systemstructuressuchasthenetworkandthreadmodels.Wesetup
+our experiments on CloudLAB m510 machines with 64 vCPUs and
+64GB of DDR3 memory. Each replica and client run on a separate
+machine.
+WecomparedFairDAG-ABandFairDAG-RLwiththefollowing
+baseline protocols:
+• Pbft [20]: A single-leader consensus protocol without fair-
+ness guarantees, n > 3f.
+• Pompe [79]: an absolute fairness protocol running on top
+of Pbft, n > 3f.
+• Themis [44]: a relative fairness protocol running on top of
+Pbft, n > f( 2 2 𝛾 𝛾 − + 1 2) .
+• RCC [31]: a multi-proposer protocol that runs concurrent
+Pbft instances without fairness guarantees, n > 3f.
+• Tusk[24],amulti-proposerDAG-basedconsensusprotocol
+without fairness guarantees, n > 3f.
+For Themis and FairDAG-RL, we set𝛾 = 1 in the experiments
+by default. And we implement the DAG layer of FairDAG-AB and
+FairDAG-RL on top of a variant of Tusk with weak edges.
+8.1 Scalability
+In the scalability experiments, we measure two metrics:
+• Throughput – the maximum number of transactions per
+second that the system reaches consensus.
+)s(ycnetaL
+Figure 10: Throughput vs latency with f = 8.
+• Client Latency – the average duration between the time a
+client sends a transaction and the time the client receives
+f+1 matching responses.
+Wecomparetheperformanceoftheprotocolswithvaryingf,the
+maximum number of faulty replicas allowed, from 5 to 8. With the
+same f, different protocols have different minimum replica number
+requirements. For example, when f = 5, Themis requires n = 21
+replicas, while other protocols require n = 16 replicas.
+Besidesdesign,theperformanceoftheprotocolsishighlyrelated
+to the workloads. As shown in Figure 10, where we set f = 8, as the
+workload increases, the throughput increases until the pipeline is
+fulfilled by the transactions. Then, after reaching the throughput
+limit, the latency increases as the workload increases. We define by
+optimal point the point with the lowest latency while maintaining
+the highest throughput. And we evaluate their scalability at the
+optimal points of the protocols with varying f.
+Throughput. Figure 11 shows that Tusk and RCC achieve higher
+throughput than other protocols because they have multiple
+proposers and no overhead for fairness guarantees. Due to the
+fairness overhead, when f = 5 and f = 8, FairDAG-AB reaches
+83.5% and 84.9% throughput of Tusk, while FairDAG-RL reaches
+11.9% and 12.6% throughput of Tusk.
+However, compared to Pompe and Themis, the multi-proposer
+design of the DAG layer brings FairDAG-AB and FairDAG-RL
+advantages in throughput. When f = 5 and f = 8, FairDAG-AB ob-
+tains 30.2% and 52.6% higher throughput than Pompe, respectively.
+Similarly, FairDAG-RL reaches 7.5% and 5.1% higher throughput
+than Themis.
+Latency. Without the fairness overhead, Tusk and Pbft, as the
+underlying consensus protocols, have lower latency than the
+fairness protocols running on top of them.
+With f = 5 and f = 8, FairDAG-AB latency is 7.1% and 8.3%
+higher than Pompe, because Tusk, the underlying DAG consensus
+protocol of FairDAG-AB, has a higher commit latency than Pbft,
+the underlying consensus protocol of Pompe.
+FairDAG-RL has a latency close to Themis when f = 5. As f
+grows, FairDAG-RL has a lower latency than Themis, which is
+20.9% lower when f = 8. FairDAG-RL achieves a lower latency
+becauseThemisneedsf morecorrectreplicastoguaranteefairness,
+which causes higher overhead for both consensus and ordering.
+By comparing the latency of Themis with f = 6 and FairDAG-RL
+with f = 8, we can verify this claim: with the same replica number
+n = 25, FairDAG-RL achieves a 4.6% higher latency than Themis.
+274
+
+===== PAGE 11 =====
+PBFT RCC Tusk Pompe FairDAG-AB Themis FairDAG-RL
+·106
+1.0
+0.5
+0.0 5 6 7 8
+f
+)s/nxt(tuphguorhT
+(a)Single-Region
+0.3
+0.2
+0.1
+0.0 5 6 7 8
+f
+)s(ycnetaL
+(b)Single-Region ·106
+1.0
+0.5
+0.0 1 2 3 4
+NumberofRegions
+)s/nxt(tuphguorhT
+(c)Multi-Region,f=8
+6
+4
+2
+0 1 2 3 4
+NumberofRegions
+)s(ycnetaL
+(d)Multi-Region,f=8
+Figure 11: Performance of FairDAG and baseline protocols, with varying f (a,b), and varying number of regions (c,d).
+Themis FairDAG-RL Themis-Rashnu FairDAG-RL-Rashnu
+·105
+4
+2
+0 0.01 0.5 0.99
+skewness
+)s/nxt(tuphguorhT
+(a)Throughput
+80
+60
+40
+20
+0 0.01 0.5 0.99
+skewness
+)sm(ycnetaL
+Pompe FairDAG-AB Themis FairDAG-RL
+(b)Latency
+·105
+8
+6
+4
+2
+0
+0 2 4 6 8 10 12 14 16 18 20 22 24 26
+Timeline(s)
+Figure 12: Performance of Rashnu-enhanced variants vs. rel-
+ative fairness protocols.
+Geo-distributed performance. We conducted experiments
+under geo-distributed settings by deploying the systems across
+multipleAWSregions.Specifically,wevariedthenumberofregions
+from 1 to 4. The regions include North Virginia, Oregon, London,
+and Zurich. We fixed f = 8 and deploys n replicas in each region, 𝑘
+where𝑘 is the number of regions. Figure 11 (c, d) show that in the
+geo-distributed setting, the latencies of all the protocols are high
+and increase with the number of regions, caused by the high inter-
+regional message delays. Furthermore, FairDAG-AB has higher
+throughput than the other fairness protocols.
+We found that for all protocols except the relative fairness pro-
+tocols, increasing the batch size allowed us to achieve throughput
+valuescomparabletothoseinthesingle-regionsetting.However,in
+FairDAG-RL and Themis, a larger batch size leads to a higher over-
+head of the fairness layer, which increases quadratically with batch
+size. Moreover, while FairDAG-RL achieves only a 5.1% through-
+put improvement over Themis in a single-region setting, we ob-
+serve that in the geo-distributed setting, FairDAG-RL outperforms
+Themis by at least 42.1%. This significant gain is attributed to the
+robust performance of the underlying multi-proposer DAG-based
+consensus protocol in geo-scale settings with limited bandwidth
+and higher message delays.
+Data-dependent fairness. Rashnu [53] proposes a technique
+to reduce the overhead of the fairness layer in relative fairness pro-
+tocols by computing edge directions between only data-dependent
+transactions. This method is orthogonal to both FairDAG-RL and
+Themis. We implementeded two Rashnu-enhanced variants, called
+Themis-Rashnu and FairDAG-RL-Rashnu, and compared them
+to Themis and FairDAG-RL.
+In this experiment, we implemented a transaction workload
+with keys following a Zipfian distribution. We fixed f = 8 and
+varied the skewness parameter𝑠 from 0.01 to 0.99, where a higher
+skewness indicates greater data dependency between transactions.
+The results presented in Figure 12 show that the Rashnu variants
+)s/nxt(tuphguorhT
+Figure 13: Real-Time throughput with a faulty leader.
+outperform the non-Rashnu variants and perform better as the
+skewness decreases. This improvement stems from the reduced
+overhead in calculating edge directions when transactions are less
+interdependent.
+8.2 Tolerance to Byzantine Behavior
+Next, we will discuss the impact of Byzantine behaviors on the
+performance and transaction ordering fairness of the protocols.
+Faulty leader. In this experiment, we make the consensus leader
+replica in Pompe and Themis faulty, which would trigger a
+view-change for leader replacement. While for FairDAG-AB and
+FairDAG-RL, we make a replica faulty due to the multi-proposer
+design. Figure 13 shows how the faulty leader affects the
+performance of Themis and Pompe. At time 7, the faulty leader
+stops sending any messages. After a period without progress, a
+view-change is triggered to replace the faulty leader. At time 15,
+the view-change is complete, and the throughput of Pompe and
+Themis recovers to the original level. In contrast, FairDAG-RL and
+FairDAG-AB are not affected because of the resilience provided by
+the multi-proposer design.
+Adversarial Manipulation. We conduct two experiments in
+which Byzantine replicas attempt to manipulate transaction
+ordering. We evaluated the fairness quality of the fairness
+protocols under two Byzantine behaviors: (1) Reversing order: in
+each round, the Byzantine replicas reverse the local orderings of
+the transactions it has received. (2) Targeted delay: the Byzantine
+replicas intentionally delay targeted transactions by giving them
+higher local ordering indicators. In both cases, the Byzantine
+leader in Pompe and Themis excludes local orderings from f
+correct replicas.
+For two transactions𝑇 1 and𝑇 2, we say that they are correctly
+ordered if𝑇 1 is ordered before𝑇 2 and:
+(1) in relative fairness protocols,𝑤𝑒𝑖𝑔ℎ𝑡[(𝑑 1 ,𝑑 2 )] > 𝑛 2 ;
+275
+
+===== PAGE 12 =====
+(2) in absolute fairness protocols, the f+1-th smallest local Themis-0 Themis-1 Themis-7 Themis-10
+FairDAG-RL-0 FairDAG-RL-1 FairDAG-RL-7 FairDAG-RL-10
+ordering indicator of𝑑 1 is not larger than that of𝑑 2.
+For the reversing order attack, we consider all transaction pairs; for
+1.0
+the targeted delay attack, we consider only the transaction pairs
+that involve the targeted transactions. 0.9
+For FairDAG-RL and Themis, we measure the ratio of cor- 0.8
+rectlyorderedpairswithdifferent𝐷𝑖𝑠𝑡 values,where𝐷𝑖𝑠𝑡(𝑑
+1
+,𝑑
+2
+) =
+|𝑤𝑒𝑖𝑔ℎ𝑡[(𝑑
+1
+,𝑑
+2
+)] −𝑤𝑒𝑖𝑔ℎ𝑡[(𝑑
+2
+,𝑑
+1
+)]|. 0.7
+𝐷𝑖𝑠𝑡
+1
+(𝑑1,𝑑
+6
+2)=
+1
+|𝑤
+1
+𝑒𝑖𝑔
+1
+ℎ
+6
+𝑡[(𝑑
+2
+1
+1
+,𝑑2)
+2
+]
+6
+−𝑤
+31
+𝑒𝑖𝑔ℎ
+3
+𝑡
+6
+[(𝑑2
+4
+,
+1
+𝑑1)]|
+For FairDAG-AB and Pompe, we measure the ratio of correctly
+ordered pairs with different 𝐷𝑖𝑓 𝑓 values, where 𝐷𝑖𝑓 𝑓 (𝑑 1 ,𝑑 2 ) is
+the minimal number of Byzantine local ordering indicators needed
+to order𝑑 1 before𝑑 2. Formally, we denote by𝑎𝑠𝑐_𝑜𝑖𝑠𝐶 1 [𝑖] the𝑖-th
+smallest value in the correct local ordering indicators of𝑑 1, and by
+𝑑𝑒𝑠𝑐_𝑜𝑖𝑠𝐶[𝑗] the 𝑗-thlargest valueinthecorrectlocalorderingindi-
+2
+catorsof𝑑 2.Toorder𝑑 1 before𝑑 2,weneedtofind(1)apairof𝑖 and 𝑗
+such that𝑎𝑠𝑐_𝑜𝑖𝑠𝐶[𝑖] < 𝑑𝑒𝑠𝑐_𝑜𝑖𝑠𝐶[𝑗], (2) f+1−𝑖 Byzantine local or-
+1 2 deringindicatorssmallerthan𝑎𝑠𝑐_𝑜𝑖𝑠𝐶[𝑖],and(3)f+1−𝑗
+Byzantine
+1
+local ordering indicators larger
+than𝑑𝑒𝑠𝑐_𝑜𝑖𝑠𝐶[𝑗].
+Thus, we have
+2
+𝐷𝑖𝑓 𝑓 (𝑑
+1
+,𝑑
+2
+) = min{2(f+1)−𝑖−𝑗 | 𝑎𝑠𝑐_𝑜𝑖𝑠𝐶
+1
+[𝑖] < 𝑑𝑒𝑠𝑐_𝑜𝑖𝑠𝐶
+2
+[𝑗]},
+whichistheminimalnumberofByzantinelocalorderingindicators
+needed. We only consider transaction pairs with 𝐷𝑖𝑓 𝑓 (𝑑 1 ,𝑑 2 ) > 0.
+We set f = 10 and vary f𝑎, the actual number of Byzantine
+replicas, from 0 to 10. For example, Themis-7 denotes Themis with
+f𝑎 = 7. As shown in Figure 14, FairDAG-RL and FairDAG-AB
+consistentlydemonstratebetterresilienceagainstadversarialorder-
+ing manipulation in all experimental settings, compared to Themis
+and Pompe, respectively. The results substantiate our claim that
+FairDAG effectively mitigates adversarial ordering manipulation
+throughthepropertiesinherentintheDAG-basedconsensuslayer.
+9 RELATED WORK
+In traditional Byzantine Fault Tolerance (BFT) research, proto-
+cols [5, 20, 30, 34] are designed to ensure both safety and live-
+ness in the presence of malicious replicas. Although these pro-
+tocols do not explicitly guarantee fair transaction ordering, they
+mitigate unfair ordering to some extent. Protocols such as Hot-
+Stuff [74], which employ leader rotation in a round-robin man-
+ner [15, 26, 28, 32, 40, 41, 49], provide each participant with the
+opportunity to propose a block. Multi-proposer approaches, includ-
+ing concurrent consensus protocols [27, 31, 41, 64] and DAG-based
+protocols [6, 8, 24, 43, 62, 63, 71], enable multiple participants to
+propose blocks concurrently, ordering them globally through pre-
+determined or randomized mechanisms. Although these protocols
+reduce the reliance on a single leader and distribute transaction
+ordering authority, a Byzantine participant can still manipulate the
+ordering of transactions within the blocks it proposes.
+Some protocols seek to eliminate the block proposers’ oligarchy
+over the ordering of transactions within blocks via censorship re-
+sistance [4, 7, 17, 25, 47, 50, 51, 65, 71, 75]. In these protocols, a
+transaction is encrypted until the ordering of the transaction is de-
+termined. However, block proposers can still engage in censorship
+based on metadata, such as IP addresses, or prioritize their own
+transactions, knowing the content of encrypted transactions.
+There are several prior fairness protocols that generate final
+ordering with collected local orderings. Wendy [46] guarantees
+Timed-Relative-Fairness similar to Ordering Linearizability, but it
+sriaPderedrOyltcerroCfooitaR
+(a)ReversingOrder
+1.0
+0.9
+0.8
+0.7 0 10 20 30 40 50 60 70 80 90 100
+𝐷𝑖𝑠𝑡(𝑑1,𝑑2)/n(%)
+sriaPderedrOyltcerroCfooitaR
+(b)ReversingOrder
+1.0
+0.5
+0.0
+1 6 11 16 21 26 31 36 41
+𝐷𝑖𝑠𝑡(𝑑1,𝑑2)
+sriaPderedrOyltcerroCfooitaR
+(c)TargetedDelay
+1.0
+0.5
+0.0
+0 10 20 30 40 50 60 70 80 90 100
+𝐷𝑖𝑠𝑡(𝑑1,𝑑2)/n(%)
+sriaPderedrOyltcerroCfooitaR
+(d)TargetedDelay
+Pompe-0 Pompe-1 Pompe-7 Pompe-10
+FairDAG-AB-0 FairDAG-AB-1 FairDAG-AB-7 FairDAG-AB-10
+1.0
+0.8
+0.6
+1 6 11 16 20
+𝐷𝑖𝑓𝑓(𝑑1,𝑑2)
+sriaPderedrOyltcerroCfooitaR
+(e)ReversingOrder
+1.0
+0.8
+0.6
+1 6 11 16 20
+𝐷𝑖𝑓𝑓(𝑑1,𝑑2)
+sriaPderedrOyltcerroCfooitaR
+(f)TargetedDelay
+Figure 14: Fairness quality of the fairness protocols under
+adversarial ordering manipulation attacks.
+relies on synchronized local clocks, which are impractical in asyn-
+chronous networks. DCN [22] reaches𝛿-Median Fairness such that
+𝑇 1 can be ordered before𝑇 2 if𝑇 1 is sent long enough earlier than𝑇 2.
+Aequitas [45] guarantees batch-order-fairness but suffers from live-
+ness issues due to the existence of infinite Condorcet Cycles, which
+Themis solves via a batch unspooling mechanism. Quick-Order-
+Fairness [18] reaches batch-order-fairness with n > 3f replicas
+but incurs 𝑂(n3) communication complexity for the consensus
+leader.Rashnu[53]improvesThemisperformancebyguaranteeing
+𝛾-Batch-Order-Fairness between only data-dependent transactions,
+but suffers from the same problems as Themis. SpeedyFair [52]
+pipelines the consensus layer and fairness layer, but still relies on
+a single leader to collect local orderings. Ambush attacks are iden-
+tified in [56], which FairDAG-RL inherently mitigates with the
+underlying DAG-based consensus.
+10 CONCLUSION
+In this paper, we introduced FairDAG, a fair-ordering framework
+designed to run fairness protocols atop DAG-based consensus pro-
+tocols.Throughtheoreticaldemonstrationandexperimentalevalua-
+tion,weshowthatunlikepreviousfairnessprotocols,FairDAG-AB
+and FairDAG-RL, the two variants of FairDAG, not only uphold
+fairness guarantees, but also achieve better performance under nor-
+mal and adversarial conditions, effectively constraining adversarial
+manipulation of transaction ordering.
+ACKNOWLEDGMENTS
+This work is partially funded by NSF Award Number 2245373.
+276
+
+===== PAGE 13 =====
+REFERENCES
+consensuswithasynchronousfallback.InInternationalconferenceonfinancial
+[1] 2022. AptosWhitepaper:Safe,Scalable,andUpgradeableWeb3Infrastructure. cryptographyanddatasecurity.Springer,296–315.
+https://arxiv.org/abs/2201.01107 [27] NeilGiridharan,FlorianSuri-Payer,IttaiAbraham,LorenzoAlvisi,andNatacha
+[2] 2024. ApacheResilientDB(Incubating). https://resilientdb.incubator.apache.org/ Crooks.2024. Autobahn:SeamlesshighspeedBFT.InProceedingsoftheACM
+[3] MichaelAbebe,BradGlasbergen,andKhuzaimaDaudjee.2020.DynaMast:Adap- SIGOPS30thSymposiumonOperatingSystemsPrinciples.1–23.
+tivedynamicmasteringforreplicatedsystems.In2020IEEE36thinternational [28] NeilGiridharan,FlorianSuri-Payer,MatthewDing,HeidiHoward,IttaiAbraham,
+conferenceondataengineering(ICDE).IEEE,1381–1392. andNatachaCrooks.2023.BeeGees:Stayin’AliveinChainedBFT.InProceedings
+[4] Amit Agarwal, Kushal Babel, Sourav Das, and Babak Poorebrahim Gilkalaye. ofthe2023ACMSymposiumonPrinciplesofDistributedComputing (Orlando,FL,
+2025. Time-LockEncryptedStorageforBlockchains. CryptologyePrintArchive USA)(PODC’23).AssociationforComputingMachinery,NewYork,NY,USA,
+(2025). 233–243. https://doi.org/10.1145/3583668.3594572
+[5] MohammadJavadAmiri,ChenyuanWu,DivyakantAgrawal,AmrElAbbadi, [29] RachidGuerraoui,PetrKuznetsov,MatteoMonti,MatejPavlovic,andDragos-
+BoonThauLoo,andMohammadSadoghi.2024. TheBedrockofByzantineFault AdrianSeredinschi.2019. ScalableByzantineReliableBroadcast.In33rdInterna-
+Tolerance:AUnifiedPlatformforBFTProtocolsAnalysis,Implementation,and tionalSymposiumonDistributedComputing(DISC2019)(LeibnizInternational
+Experimentation.In21stUSENIXSymposiumonNetworkedSystemsDesignand ProceedingsinInformatics(LIPIcs)),Vol.146.SchlossDagstuhl–Leibniz-Zentrum
+Implementation,NSDI2024,SantaClara,CA,April15-17,2024,LaurentVanbever fuerInformatik,21:1–21:17. https://doi.org/10.4230/LIPIcs.DISC.2019.21
+andIreneZhang(Eds.).USENIXAssociation,371–400. [30] SuyashGupta,JelleHellings,SajjadRahnama,andMohammadSadoghi.2021.
+[6] BalajiArun,ZekunLi,FlorianSuri-Payer,SouravDas,andAlexanderSpiegel- Proof-of-Execution:ReachingConsensusthroughFault-TolerantSpeculation.In
+man. 2024. Shoal++: High throughput dag bft can be fast! arXiv preprint Proceedingsofthe24thInternationalConferenceonExtendingDatabaseTechnology,
+arXiv:2405.20488(2024). EDBT 2021, Nicosia, Cyprus, March 23 - 26, 2021, Yannis Velegrakis, Demetris
+[7] AviAsayag,GadCohen,IdoGrayevsky,MayaLeshkowitz,OriRottenstreich, Zeinalipour-Yazti,PanosK.Chrysanthis,andFrancescoGuerra(Eds.).OpenPro-
+RonenTamari,andDavidYakira.2018. Afairconsensusprotocolfortransaction ceedings.org,301–312. https://doi.org/10.5441/002/edbt.2021.27
+ordering.In2018IEEE26thInternationalConferenceonNetworkProtocols(ICNP). [31] Suyash Gupta, Jelle Hellings, and Mohammad Sadoghi. 2021. RCC: Resilient
+IEEE,55–65. ConcurrentConsensusforHigh-ThroughputSecureTransactionProcessing.In
+[8] KushalBabel,AndreyChursin,GeorgeDanezis,LefterisKokoris-Kogias,andAl- 37thIEEEInternationalConferenceonDataEngineering,ICDE2021,Chania,Greece,
+bertoSonnino.2023. Mysticeti:Low-LatencyDAGConsensuswithFastCommit April19-22,2021.IEEE,1392–1403. https://doi.org/10.1109/ICDE51399.2021.00124
+Path. CoRRabs/2310.14821(2023). [32] SuyashGupta,DakaiKang,DahliaMalkhi,andMohammadSadoghi.2025. Brief
+[9] PaddyBakerandOmkarGodbole.2020. EthereumFeesSoaringto2-YearHigh: Announcement: Carry the Tail in Consensus Protocols. In 39th International
+CoinMetrics. CoinDesk(2020). https://www.coindesk.com/defi-hype-has-sent- Symposium on Distributed Computing (DISC 2025). Schloss Dagstuhl–Leibniz-
+ethereum-fees-soaring-to-2-year-high-coin-metrics ZentrumfürInformatik,59–1.
+[10] SameBlackshear,AndreyChursin,GeorgeDanezis,AnastasiosKichidis,Lefteris [33] SuyashGupta,SajjadRahnama,JelleHellings,andMohammadSadoghi.2020.
+Kokoris-Kogias, Xun Li, Mark Logan, Ashok Menon, Todd Nowacki, Alberto ResilientDB:GlobalScaleResilientBlockchainFabric. Proc.VLDBEndow.13,6
+Sonnino,etal.2023. Suilutris:Ablockchaincombiningbroadcastandconsensus. (2020),868–883. https://doi.org/10.14778/3380750.3380757
+arXivpreprintarXiv:2310.18042 (2023). [34] Suyash Gupta, Sajjad Rahnama, Shubham Pandey, Natacha Crooks, and Mo-
+[11] GabrielBracha.1987.AsynchronousByzantineagreementprotocols.Information hammadSadoghi.2023. DissectingBFTConsensus:InTrustedComponentswe
+andComputation75,2(1987),130–143. Trust!.InProceedingsoftheEighteenthEuropeanConferenceonComputerSystems.
+[12] FelixBrandt,VincentConitzer,UlleEndriss,JérômeLang,andArielD.Procaccia. ACM,521–539. https://doi.org/10.1145/3552326.3587455
+2016. HandbookofComputationalSocialChoice. CambridgeUniversityPress, [35] LiobaHeimbach,EricSchertenleib,andRogerWattenhofer.2022. Risksandre-
+Cambridge,UK. turnsofuniswapv3liquidityproviders.InProceedingsofthe4thACMConference
+[13] Lorenz Breidenbach, Christian Cachin, Benedict Chan, Alex Coventry, Steve onAdvancesinFinancialTechnologies.89–101.
+Ellis,AriJuels,FarinazKoushanfar,AndrewMiller,BrendanMagauran,Daniel [36] Joshua Hildred, Michael Abebe, and Khuzaima Daudjee. 2023. Caerus: Low-
+Moroz,etal.2021. Chainlink2.0:Nextstepsintheevolutionofdecentralized LatencyDistributedTransactionsforGeo-ReplicatedSystems. Proceedingsofthe
+oraclenetworks. ChainlinkLabs1(2021),1–136. VLDBEndowment 17,3(2023),469–482.
+[14] ChristopherBrookins.2020. DeFiBoomHasSavedBitcoinFromPlummeting. [37] YumingHuang,JingTang,QianhaoCong,AndrewLim,andJianliangXu.2021.
+Forbes(2020). https://www.forbes.com/sites/christopherbrookins/2020/07/12/ DotheRichGetRicher?FairnessAnalysisforBlockchainIncentives(SIGMOD
+defi-boom-has-saved-bitcoin-from-plummeting/ ’21).AssociationforComputingMachinery,NewYork,NY,USA,790–803. https:
+[15] EthanBuchman,JaeKwon,andZarkoMilosevic.2018. ThelatestgossiponBFT //doi.org/10.1145/3448016.3457285
+consensus. CoRRabs/1807.04938(2018). [38] DakaiKang,JunchaoChen,AnhDinh,andMohammadSadoghi.2025. FairDAG.
+[16] VitalikButerin.2013.EthereumWhitePaper:ANext-GenerationSmartContract https://github.com/apache/incubator-resilientdb/tree/fairdag Accessed:2025-04-
+andDecentralizedApplicationPlatform. https://ethereum.org/en/whitepaper/. 01.
+[17] ChristianCachin,KlausKursawe,FrankPetzold,andVictorShoup.2001. Se- [39] DakaiKang,JunchaoChen,TienTuanAnhDinh,andMohammadSadoghi.2025.
+cure and efficient asynchronous broadcast protocols. In Annual International FairDAG:ConsensusFairnessoverMulti-ProposerCausalDesign. arXivpreprint
+CryptologyConference.Springer,524–541. arXiv:2504.02194(2025).
+[18] ChristianCachin,JovanaMićić,NathalieSteinhauer,andLucaZanolini.2022. [40] Dakai Kang, Suyash Gupta, Dahlia Malkhi, and Mohammad Sadoghi. 2024.
+Quickorderfairness.InInternationalConferenceonFinancialCryptographyand HotStuff-1: Linear Consensus with One-Phase Speculation. arXiv preprint
+DataSecurity.Springer,316–333. arXiv:2408.04728(2024).
+[19] ChristianCachinandStefanoTessaro.2005.Asynchronousverifiableinformation [41] Dakai Kang, Sajjad Rahnama, Jelle Hellings, and Mohammad Sadoghi. 2024.
+dispersal.In24thIEEESymposiumonReliableDistributedSystems(SRDS’05).IEEE, SpotLess:ConcurrentRotationalConsensusMadePracticalthroughRapidView
+191–201. https://doi.org/10.1109/SRDS.2005.36 Synchronization.In40thIEEEInternationalConferenceonDataEngineering,ICDE
+[20] MiguelCastroandBarbaraLiskov.2002. PracticalByzantineFaultTolerance 2024,Utrecht,Netherlands,May13-17,2024.IEEE.
+andProactiveRecovery. ACMTrans.Comput.Syst.20,4(2002),398–461. https: [42] JonathanKatzandYehudaLindell.2014. IntroductiontoModernCryptography
+//doi.org/10.1145/571637.571640 (2nded.). ChapmanandHall/CRC.
+[21] MarquisdeCondorcet.1785.EssayontheApplicationofAnalysistotheProbability [43] IditKeidar,EleftheriosKokoris-Kogias,OdedNaor,andAlexanderSpiegelman.
+ofMajorityDecisions. ImprimerieRoyale,Paris. 2021.Allyouneedisdag.InProceedingsofthe2021ACMSymposiumonPrinciples
+[22] AndreiConstantinescu,DianaGhinea,LiobaHeimbach,ZilinWang,andRoger ofDistributedComputing.165–175.
+Wattenhofer.2023. Afairandresilientdecentralizedclocknetworkfortransac- [44] Mahimna Kelkar, Soubhik Deb, Sishan Long, Ari Juels, and Sreeram Kannan.
+tionordering. arXivpreprintarXiv:2305.05206(2023). 2023. Themis:Fast,strongorder-fairnessinbyzantineconsensus.InProceedings
+[23] PhilipDaian,StevenGoldfeder,TylerKell,YunqiLi,XueyuanZhao,IddoBentov, ofthe2023ACMSIGSACConferenceonComputerandCommunicationsSecurity.
+LorenzBreidenbach,andAriJuels.2019.Flashboys2.0:Frontrunning,transaction 475–489.
+reordering,andconsensusinstabilityindecentralizedexchanges. arXivpreprint [45] Mahimna Kelkar, Fan Zhang, Steven Goldfeder, and Ari Juels. 2020. Order-
+arXiv:1904.05234(2019). fairnessforbyzantineconsensus.InAdvancesinCryptology–CRYPTO2020:40th
+[24] George Danezis, Lefteris Kokoris-Kogias, Alberto Sonnino, and Alexander AnnualInternationalCryptologyConference,CRYPTO2020,SantaBarbara,CA,
+Spiegelman.2022. NarwhalandTusk:aDAG-basedmempoolandefficientBFT USA,August17–21,2020,Proceedings,PartIII40.Springer,451–480.
+consensus.InProceedingsoftheSeventeenthEuropeanConferenceonComputer [46] KlausKursawe.2020. Wendy,thegoodlittlefairnesswidget:Achievingorder
+Systems.ACM,34–50. https://doi.org/10.1145/3492321.3519594 fairnessforblockchains.InProceedingsofthe2ndACMConferenceonAdvances
+[25] PranavGarimidi,JoachimNeu,andMaxResnick.2025. MultipleConcurrent inFinancialTechnologies.25–36.
+Proposers:WhyandHow. arXivpreprintarXiv:2509.23984(2025). [47] RujiaLi,XuanweiHu,QinWang,SisiDuan,andQiWang.2025. Transaction
+[26] RatiGelashvili,LefterisKokoris-Kogias,AlbertoSonnino,AlexanderSpiegel- fairnessinblockchains,revisited. IEEETransactionsonDependableandSecure
+man,andZhuolunXiang.2022. JolteonandDitto:Network-adaptiveefficient Computing (2025).
+277
+
+===== PAGE 14 =====
+[48] HatemMahmoud,FaisalNawab,AlexanderPucher,DivyakantAgrawal,and [65] Chrysoula Stathakopoulou, Signe Rüsch, Marcus Brandenburger, and Marko
+AmrElAbbadi.2013. Low-latencymulti-datacenterdatabasesusingreplicated Vukolić.2021. Addingfairnesstoorder:Preventingfront-runningattacksinbft
+commit. ProceedingsoftheVLDBEndowment 6,9(2013),661–672. protocolsusingtees.In202140thInternationalSymposiumonReliableDistributed
+[49] DahliaMalkhiandKartikNayak.2023.Hotstuff-2:Optimaltwo-phaseresponsive Systems(SRDS).IEEE,34–45.
+bft. CryptologyePrintArchive(2023). [66] Weijie Sun, Zihuan Xu, and Lei Chen. 2022. Fairness Matters: A Tit-for-Tat
+[50] DahliaMalkhiandPawelSzalachowski.2022. Maximalextractablevalue(mev) StrategyAgainstSelfishMining.Proc.VLDBEndow.15,13(Sept.2022),4048–4061.
+protectiononadag. arXivpreprintarXiv:2208.00940 (2022). https://doi.org/10.14778/3565838.3565856
+[51] Andrew Miller, Yu Xia, Kyle Croman, Elaine Shi, and Dawn Song. 2016. The [67] Weijie Sun, Zihuan Xu, Wangze Ni, and Lei Chen. 2025. InTime: Towards
+honeybadgerofBFTprotocols.InProceedingsofthe2016ACMSIGSACconference PerformancePredictabilityInByzantineFaultTolerantProof-of-StakeConsensus.
+oncomputerandcommunicationssecurity.31–42. Proc.ACMManag.Data3,1,Article47(Feb.2025),27pages. https://doi.org/10.
+[52] KeMu,BoYin,AliaAsheralieva,andXuetaoWei.2024. Separationisgood:A 1145/3709740
+fasterorder-fairnessByzantineconsensus. (2024). [68] Alexander Thomson, Thaddeus Diamond, Shu-Chun Weng, Kun Ren, Philip
+[53] HeenaNagda,ShubhendraPalSinghal,MohammadJavadAmiri,andBoonThau Shao,andDanielJAbadi.2012. Calvin:fastdistributedtransactionsforparti-
+Loo.2024. Rashnu:Data-DependentOrder-Fairness. ProceedingsoftheVLDB tioneddatabasesystems.InProceedingsofthe2012ACMSIGMODinternational
+Endowment 17,9(2024),2335–2348. conferenceonmanagementofdata.1–12.
+[54] SatoshiNakamoto.2009. Bitcoin:APeer-to-PeerElectronicCashSystem. https: [69] YeWang,PatrickZuest,YaxingYao,ZhicongLu,andRogerWattenhofer.2022.
+//bitcoin.org/bitcoin.pdf Impactanduserperceptionofsandwichattacksinthedefiecosystem.InPro-
+[55] SenthilNathan,ChanderGovindarajan,AdarshSaraf,ManishSethi,andPraveen ceedings of the 2022 CHI Conference on Human Factors in Computing Systems.
+Jayachandran.2019. Blockchainmeetsdatabase:designandimplementationofa 1–15.
+blockchainrelationaldatabase. Proc.VLDBEndow.12,11(July2019),1539–1552. [70] BenWeintraub,ChristofFerreiraTorres,CristinaNita-Rotaru,andRaduState.
+https://doi.org/10.14778/3342263.3342632 2022. Aflash(bot)inthepan:measuringmaximalextractablevalueinprivate
+[56] EunchanPark,TaeungYoon,HocheolNam,DeepakMaram,andMinSukKang. pools.InProceedingsofthe22ndACMInternetMeasurementConference.458–471.
+2025. On Frontrunning Risks in Batch-Order Fair Systems for Blockchains [71] ShaokangXie,DakaiKang,HanzhengLyu,JianyuNiu,andMohammadSadoghi.
+(ExtendedVersion). CryptologyePrintArchive,Paper2025/1168. https://doi. 2025. Fides:ScalableCensorship-ResistantDAGConsensusviaTrustedCompo-
+org/10.1145/3719027.3744879 nents. arXivpreprintarXiv:2501.01062 (2025).
+[57] KaihuaQin,LiyiZhou,PabloGamito,PhilippJovanovic,andArthurGervais. [72] AnatolyYakovenko.2018. Solana:Anewarchitectureforahighperformance
+2021. Anempiricalstudyofdefiliquidations:Incentives,risks,andinstabilities. blockchainv0.8.13. Whitepaper (2018).
+InProceedingsofthe21stACMInternetMeasurementConference.336–350. [73] SenYang,FanZhang,KenHuang,XiChen,YouweiYang,andFengZhu.2022.
+[58] Kaihua Qin, Liyi Zhou, and Arthur Gervais. 2022. Quantifying blockchain Sok:Mevcountermeasures:Theoryandpractice. arXivpreprintarXiv:2212.05111
+extractablevalue:Howdarkistheforest?.In2022IEEESymposiumonSecurity (2022).
+andPrivacy(SP).IEEE,198–214. [74] MaofanYin,DahliaMalkhi,MichaelK.Reiter,GuyGolanGueta,andIttaiAbra-
+[59] KaihuaQin,LiyiZhou,BenjaminLivshits,andArthurGervais.2021. Attacking ham. 2019. HotStuff: BFT Consensus with Linearity and Responsiveness. In
+thedefiecosystemwithflashloansforfunandprofit.InInternationalconference ProceedingsoftheACMSymposiumonPrinciplesofDistributedComputing.ACM,
+onfinancialcryptographyanddatasecurity.Springer,3–32. 347–356. https://doi.org/10.1145/3293611.3331591
+[60] KunRen,DennisLi,andDanielJAbadi.2019. Slog:Serializable,low-latency, [75] PouriyaZarbafianandVincentGramoli.2023. Lyra:Fastandscalableresilience
+geo-replicatedtransactions. ProceedingsoftheVLDBEndowment 12,11(2019). to reordering attacks in blockchains. In 2023 IEEE International Parallel and
+[61] FabianSchär.2021. Decentralizedfinance:Onblockchain-andsmartcontract- DistributedProcessingSymposium(IPDPS).IEEE,929–939.
+basedfinancialmarkets. FRBofSt.LouisReview (2021). [76] DirkAZetzsche,DouglasWArner,andRossPBuckley.2020. Decentralized
+[62] AlexanderSpiegelman,BalajiArun,RatiGelashvili,andZekunLi.2023. Shoal: finance. JournalofFinancialRegulation6,2(2020),172–203.
+ImprovingDAG-BFTlatencyandrobustness. arXivpreprintarXiv:2306.03058 [77] JiantingZhangandAniketKate.2024. Nofishistoobigforflashboys!frontrun-
+(2023). ningonDAG-basedblockchains. CryptologyePrintArchive(2024).
+[63] AlexanderSpiegelman,NeilGiridharan,AlbertoSonnino,andLefterisKokoris- [78] MeihuiZhang,ZhongleXie,CongYue,andZiyueZhong.2020. Spitz:averifiable
+Kogias.2022. Bullshark:DAGBFTProtocolsMadePractical.InProceedingsofthe databasesystem.13,12(Aug.2020),3449–3460. https://doi.org/10.14778/3415478.
+2022ACMSIGSACConferenceonComputerandCommunicationsSecurity,CCS 3415567
+2022,LosAngeles,CA,USA,November7-11,2022,HengYin,AngelosStavrou,Cas [79] YunhaoZhang,SrinathSetty,QiChen,LidongZhou,andLorenzoAlvisi.2020.
+Cremers,andElaineShi(Eds.).ACM,2705–2718. Byzantineorderedconsensuswithoutbyzantineoligarchy.In14thUSENIXSym-
+[64] ChrysoulaStathakopoulou,TudorDavid,andMarkoVukolic.2019. Mir-BFT: posiumonOperatingSystemsDesignandImplementation(OSDI20).633–649.
+High-ThroughputBFTforBlockchains. http://arxiv.org/abs/1906.05552
+278

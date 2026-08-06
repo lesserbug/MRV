@@ -214,6 +214,13 @@ class Bench:
 
         return committee
 
+    def _upload_parameters(self, committee, node_parameters, mrv_window):
+        """Upload a scalar MRV window before starting the next sweep run."""
+        node_parameters.print(PathMaker.parameters_file(), mrv_window=mrv_window)
+        for ip in set(committee.ips()):
+            c = Connection(ip, user='ubuntu', connect_kwargs=self.connect)
+            c.put(PathMaker.parameters_file(), '.')
+
     def _run_single(self, rate, committee, bench_parameters, debug=False):
         faults = bench_parameters.faults
 
@@ -280,12 +287,24 @@ class Bench:
             g = Group(*hosts, user='ubuntu', connect_kwargs=self.connect)
             g.run(f'({CommandMaker.kill_clients()} || true)', hide=True)
 
-            for _ in progress_bar(range(20), prefix=f'Draining benchmark ({drain_duration} sec):'):
-                sleep(ceil(drain_duration / 20))
+            sleep(drain_duration)
+        else:
+            Print.warn(
+                'drain_duration is 0; the final MRV window is right-censored'
+            )
 
         self.kill(hosts=hosts, delete_logs=False)
 
-    def _logs(self, committee, faults):
+    def _logs(
+        self,
+        committee,
+        faults,
+        node_count,
+        input_rate,
+        mrv_window,
+        run_index,
+        experiment_id,
+    ):
         # Delete local logs (if any).
         cmd = CommandMaker.clean_logs()
         subprocess.run([cmd], shell=True, stderr=subprocess.DEVNULL)
@@ -318,7 +337,18 @@ class Bench:
 
         # Parse logs and return the parser.
         Print.info('Parsing logs and computing performance...')
-        return LogParser.process(PathMaker.logs_path(), faults=faults)
+        parser = LogParser.process(
+            PathMaker.logs_path(),
+            faults=faults,
+            deployment='remote',
+            node_count=node_count,
+            input_rate=input_rate,
+            mrv_window=mrv_window,
+            run_index=run_index,
+            experiment_id=experiment_id,
+        )
+        parser.print_mrv(PathMaker.mrv_results_file())
+        return parser
 
     def run(self, bench_parameters_dict, node_parameters_dict, debug=False):
         assert isinstance(debug, bool)
@@ -351,35 +381,52 @@ class Bench:
             e = FabricError(e) if isinstance(e, GroupException) else e
             raise BenchError('Failed to configure nodes', e)
 
-        # Run benchmarks.
-        for n in bench_parameters.nodes:
-            committee_copy = deepcopy(committee)
-            committee_copy.remove_nodes(committee.size() - n)
+        # Run benchmarks. The file uploaded before each outer iteration contains
+        # one scalar mrv_window; candidate sweeps are a runner concern only.
+        for window_index, mrv_window in enumerate(node_parameters.mrv_windows):
+            # _config already uploaded the first scalar window.
+            if window_index > 0:
+                self._upload_parameters(committee, node_parameters, mrv_window)
 
-            for r in bench_parameters.rate:
-                Print.heading(f'\nRunning {n} nodes (input rate: {r:,} tx/s)')
+            for n in bench_parameters.nodes:
+                committee_copy = deepcopy(committee)
+                committee_copy.remove_nodes(committee.size() - n)
 
-                # Run the benchmark.
-                for i in range(bench_parameters.runs):
-                    Print.heading(f'Run {i+1}/{bench_parameters.runs}')
-                    try:
-                        self._run_single(
-                            r, committee_copy, bench_parameters, debug
-                        )
+                for r in bench_parameters.rate:
+                    Print.heading(
+                        f'\nRunning {n} nodes (input rate: {r:,} tx/s, '
+                        f'MRV window: {mrv_window})'
+                    )
 
-                        faults = bench_parameters.faults
-                        logger = self._logs(committee_copy, faults)
-                        logger.print(PathMaker.result_file(
-                            faults,
-                            n, 
-                            bench_parameters.workers,
-                            bench_parameters.collocate,
-                            r, 
-                            bench_parameters.tx_size, 
-                        ))
-                    except (subprocess.SubprocessError, GroupException, ParseError) as e:
-                        self.kill(hosts=selected_hosts)
-                        if isinstance(e, GroupException):
-                            e = FabricError(e)
-                        Print.error(BenchError('Benchmark failed', e))
-                        continue
+                    # Run the benchmark.
+                    for i in range(bench_parameters.runs):
+                        Print.heading(f'Run {i+1}/{bench_parameters.runs}')
+                        try:
+                            self._run_single(
+                                r, committee_copy, bench_parameters, debug
+                            )
+
+                            faults = bench_parameters.faults
+                            logger = self._logs(
+                                committee_copy,
+                                faults,
+                                n,
+                                r,
+                                mrv_window,
+                                i + 1,
+                                bench_parameters.experiment_id,
+                            )
+                            logger.print(PathMaker.result_file(
+                                faults,
+                                n,
+                                bench_parameters.workers,
+                                bench_parameters.collocate,
+                                r,
+                                bench_parameters.tx_size,
+                            ))
+                        except (subprocess.SubprocessError, GroupException, ParseError) as e:
+                            self.kill(hosts=selected_hosts)
+                            if isinstance(e, GroupException):
+                                e = FabricError(e)
+                            Print.error(BenchError('Benchmark failed', e))
+                            continue

@@ -1,0 +1,160 @@
+\section{System Model and Problem Statement}
+\label{sec:model}
+
+We model MRV as a post-consensus ordering layer between DAG commitment and execution. The base protocol determines which vertices are committed and the order of commit decisions; MRV does not modify dissemination, voting, or commit rules. For each execution slice exported by the base protocol, MRV reads only committed DAG metadata and derives a deterministic order over the
+vertices in that slice. To compare causally incomparable vertices in the same slice, MRV fixes this order from the committed snapshot defined below. This snapshot can include vertices committed after the slice was exported, but MRV uses these later
+vertices only as evidence and never changes slice membership or slice order. The following subsections define the exported objects, the adversary model, the structural evidence used by MRV, and the required ordering properties.
+
+\subsection{System and Exporter Model}
+
+We consider $n$ replicas $\mathcal{R}=\{1,\ldots,n\}$, of which at most $f$ are Byzantine, with $n\geq 3f+1$. Replicas also create DAG vertices. Each certified vertex $X$ contains an authenticated creator $\mathsf{cr}(X)$, a round number
+$r(X)$, a canonical digest $\mathsf{dig}(X)$, and authenticated parent references $\mathsf{Par}(X)$. Parent references point to lower rounds. We write $\mathsf{Anc}(X)$ for the reflexive ancestor set of $X$; for distinct vertices $A$ and $B$, $B\in\mathsf{Anc}(A)$ means that $B$ causally precedes $A$.
+
+MRV receives committed output through an exporter. Commit events are indexed by $k=1,2,\ldots$. After event $k$, the exporter exposes an immutable committed prefix $P_k=(V_k,E_k)$. The prefixes are nested, and all correct replicas eventually observe the same prefix sequence. They need not reach the same prefix at the same physical time. Each prefix is closed under parent references: for every vertex it contains, the prefix also contains the vertices and edges needed to reconstruct that vertex's ancestry. For every creator $c$ and round $t$, a prefix contains at most one canonical committed vertex, denoted by $Y^{(k)}_{c,t}$ when present. The base protocol is responsible for certificate validity, equivocation handling, and this canonical choice.
+
+The exporter also provides a common ordered sequence of nonempty execution slices $(S_1,S_2,\ldots)$. A slice contains the vertices newly delivered by one commit decision. Let $o(S_i)$ be the commit event that exports $S_i$, let $V^{\mathsf{exec}}$ be the set of committed vertices included in the exporter's execution output, and let $D_i$ denote the set of vertices delivered through $S_i$. Each vertex in $S_i$ first appears in the
+committed-prefix sequence at event $o(S_i)$; that is, $X\in S_i$ implies $X\in V_{o(S_i)}\setminus V_{o(S_i)-1}$, where
+$P_0=(V_0,E_0)$ denotes the initial committed prefix. The exporter satisfies
+\[
+\begin{aligned}
+S_i\cap S_j &= \varnothing && \text{for }i\neq j, &
+\forall X\in V^{\mathsf{exec}}\ \exists!\,i &: X\in S_i,\\
+D_i &= \bigcup_{j=1}^{i}S_j, &
+A\in D_i\land B\in\mathsf{Anc}(A)
+&\Longrightarrow B\in D_i .
+\end{aligned}
+\]
+Thus, every vertex in $V^{\mathsf{exec}}$ belongs to exactly one execution slice. For $X\in V^{\mathsf{exec}}$, let $\sigma(X)=i$ denote the unique slice index such that $X\in S_i$. For $A,B\in V^{\mathsf{exec}}$, $B\in\mathsf{Anc}(A)$ implies $\sigma(B)\leq\sigma(A)$.
+
+A single slice need not contain all ancestors of its members because some ancestors may already belong to earlier slices. In a Narwhal/Tusk-style system, the adapter forms a slice from a committed leader's causal history after removing vertices delivered by earlier commits.
+
+
+MRV waits until the exporter exposes the committed snapshot
+$P_{k^\star_{S_i}}$ defined in Section~\ref{sec:structural_evidence} before ordering $S_i$.
+Vertices from later commit events that appear in this snapshot provide evidence but do not change slice membership or slice order. MRV emits the execution order of $S_i$ before that of $S_{i+1}$.
+
+
+\subsection{Threat Model}
+\label{sec:threat}
+
+We use the authenticated Byzantine fault model of the base DAG-BFT protocol. MRV inherits the network and synchrony assumptions of the base protocol and introduces no additional synchrony assumption. The adversary may coordinate faulty replicas, schedule messages within the network model, and omit or withhold faulty vertices. Faulty replicas may equivocate, but the exporter exposes at most one canonical vertex for each creator and round.
+
+The adversary can affect the committed structure used by MRV. Faulty replicas can choose parents strategically, while message scheduling can affect which parents are available to correct replicas. Both can change which committed vertices contain a target vertex in their ancestry and can therefore affect eligibility, ordering edges, and conflicts.
+Authentication identifies the creator of a vertex and binds its parent list; it does not establish transaction arrival order or prevent strategic parent selection. MRV relies on the base protocol for consensus safety and progress. Its own termination is conditional on the exporter continuing to produce committed prefixes.
+
+\subsection{Committed Vertices and Transactions}
+\label{sec:vertex_transaction}
+
+MRV orders committed DAG vertices because the creator, round, and ancestry information used below is attached to vertices rather than individual transactions. In a Narwhal/Tusk-style system, each such object is a certified vertex in the primary DAG. MRV orders committed vertices within a slice. It does not change the
+transaction order inside a vertex or the slice order exported by the base system.
+
+Exact-once slice membership applies to vertices, not automatically to transaction payloads. Transaction validity, duplicate suppression, and the order inside a vertex remain the responsibility of the execution layer. An order between two vertices determines transaction execution only when each transaction has a unique occurrence in the committed execution output, belongs to different vertices in the same slice, and the execution layer processes complete vertices in MRV order.
+
+\subsection{Committed Snapshot and Visibility}
+\label{sec:structural_evidence}
+
+MRV uses DAG rounds to bound the evidence window and a commit index to select the snapshot on which it decides. Define $\rho(k)$ as the highest round in $P_k$. Let $W\geq1$ be the fixed observation length in DAG rounds. For a slice $S$, MRV uses
+\[
+\begin{aligned}
+\rho(k) &= \max_{X\in V_k} r(X), &
+T_r(S) &= \max_{X\in S} r(X)+W,\\
+k^\star_S &=
+\min\{k\geq o(S):\rho(k)\geq T_r(S)\}.
+\end{aligned}
+\]
+The existence of $k^\star_S$ is conditional on continued progress of the exporter. The prefix $P_{k^\star_S}$ is the common snapshot used to order $S$.
+The condition $\rho(k^\star_S)\geq T_r(S)$ does not mean that every vertex from an earlier round has been exported. A vertex absent from this snapshot makes no contribution, even if it appears later.
+
+Visibility measures how widely a committed vertex appears in committed ancestry. At round $t$, a creator contributes one observation for $X$ when its canonical vertex at that round exists in the snapshot and has $X$ as an ancestor:
+\[
+\begin{aligned}
+C_X^{(k)}(t)
+&=
+\#\{c\in\mathcal{R}:
+Y^{(k)}_{c,t}\text{ exists and }
+X\in\mathsf{Anc}(Y^{(k)}_{c,t})\},\\
+\mathsf{Elig}_S(X)
+&\iff
+\exists t\in\{r(X),\ldots,r(X)+W\}:
+C_X^{(k^\star_S)}(t)\geq q_{\mathrm{vis}} .
+\end{aligned}
+\]
+A threshold crossing only witnesses that $X$ is eligible; it does not close or shorten the pairwise comparison window. The prototype sets $q_{\mathrm{vis}}=2f+1$. Hence, an eligible vertex has a witness round in which at least $f+1$ correct creators have committed vertices whose ancestry contains it.
+
+\subsection{Pairwise Ordering Edges and SCC Order}
+\label{sec:structural_property}
+
+MRV compares two committed vertices only when they are in the same slice and neither is an ancestor of the other. For $A,B\in S$, their coexistence round, pair horizon, and comparison window are
+\[
+\begin{aligned}
+s(A,B) &= \max(r(A),r(B)), &
+H(A,B) &= s(A,B)+W,\\
+\mathcal{W}(A,B) &= \{s(A,B)+1,\ldots,H(A,B)\}.
+\end{aligned}
+\]
+Because parent references point only to lower rounds, a vertex created in round $s(A,B)$ cannot be referenced by another vertex in that round. The window therefore starts at $s(A,B)+1$, the first round that can provide cross-vertex ancestry evidence about both targets, and excludes any earlier visibility lead.
+
+At the common snapshot, MRV computes a visibility difference and checks whether it crosses the directional threshold $\theta$:
+\[
+\begin{aligned}
+\Delta_S(A,B,t)
+&=C_A^{(k^\star_S)}(t)-C_B^{(k^\star_S)}(t),\\
+\mathsf{Pos}_S(A,B)
+&\iff
+\exists t\in\mathcal{W}(A,B):
+\Delta_S(A,B,t)\geq\theta,\\
+\mathsf{Edge}_S(A,B)
+&\iff
+\mathsf{Elig}_S(A)\land\mathsf{Elig}_S(B)
+\land\mathsf{Pos}_S(A,B)
+\land\neg\mathsf{Pos}_S(B,A).
+\end{aligned}
+\]
+When $\mathsf{Edge}_S(A,B)$ holds, MRV adds an ordering edge $A\to B$. If both directions cross the threshold, the evidence conflicts and MRV adds neither edge. It also adds no edge when neither direction crosses the threshold or when either vertex is ineligible.
+
+The prototype sets $\theta=f+1$. At a given round, one creator contributes $-1$, $0$, or $1$ to $\Delta_S(A,B,t)$. Let
+$\Delta_{\mathsf{cor}}(A,B,t)$ and $\Delta_{\mathsf{byz}}(A,B,t)$ sum the contributions from correct and Byzantine creators, respectively, so that $\Delta_S(A,B,t)=\Delta_{\mathsf{cor}}(A,B,t) +\Delta_{\mathsf{byz}}(A,B,t)$. Then
+\[
+\left|\Delta_{\mathsf{byz}}(A,B,t)\right|\leq f,
+\qquad
+\Delta_S(A,B,t)\geq f+1
+\Longrightarrow
+\Delta_{\mathsf{cor}}(A,B,t)\geq1 .
+\]
+Thus, the observed margin contains a positive net contribution of at least one unit from correct creators. It does not imply that a majority of correct replicas observed $A$ before $B$, or that transactions in $A$ arrived first.
+
+For distinct $A,B\in S$ with $B\in\mathsf{Anc}(A)$, MRV adds a hard causal edge $B\to A$, which every execution order must preserve. MRV builds $G_S$ from these causal edges and the ordering edges. It computes the strongly connected components (SCCs) of $G_S$ and condenses them into a DAG. MRV uses
+the fixed lexicographic key $\kappa(X)=(r(X),\mathsf{cr}(X),\mathsf{dig}(X))$, which totally orders the vertices. For an SCC $C$, let $\kappa(C)=\min_{X\in C}\kappa(X)$. At each step of the topological sort, MRV selects the zero-indegree SCC with the smallest $\kappa(C)$. An SCC with more than one vertex contains cyclic constraints, so no linear order can satisfy all of its edges. Let $\beta_S(X)$ be the position of $X$'s SCC in this order. Every ordering edge satisfies
+\[
+\mathsf{Edge}_S(A,B)
+\Longrightarrow \beta_S(A)\leq\beta_S(B).
+\]
+If the endpoints of an ordering edge lie in the same SCC, MRV provides no strict ordering guarantee for that edge. If they lie in different SCCs, the inequality is strict. Within each SCC, MRV topologically orders the causal subgraph by selecting the zero-indegree vertex with the smallest $\kappa(X)$ at each step. It concatenates these per-SCC orders in the topological order of the SCCs to obtain a deterministic total order for execution.
+
+\subsection{Problem Statement}
+\label{sec:problem}
+
+For each slice $S_i$, MRV takes the common snapshot $P_{k^\star_{S_i}}$, the fixed window $W$, thresholds $q_{\mathrm{vis}}$ and $\theta$, and the fixed tie-breaking key $\kappa$. It outputs the SCCs in a deterministic topological order and a deterministic total order $\prec_{S_i}$ used for execution. MRV seals a slice when it fixes these outputs.
+
+Given the same committed-prefix sequence, slice sequence, and protocol parameters, all correct replicas must produce the same result, and later prefixes must not revise a sealed slice. For every ordering edge $A\to B$ in $G_S$, the SCC containing $A$ must appear no later than the SCC containing $B$. The total order must extend all hard causal edges inside the slice. Because the exporter delivers ancestors in the same or an earlier slice, concatenating the slice orders also preserves causality:
+\[
+\begin{aligned}
+\Pi_m &= \prec_{S_1}\Vert\cdots\Vert\prec_{S_m},\\
+A\neq B,\ B\in\mathsf{Anc}(A),\ A,B\in D_m
+&\Longrightarrow B\prec_{\Pi_m}A .
+\end{aligned}
+\]
+If the exporter eventually exposes a prefix $P_k$ with $k\geq o(S)$ and $\rho(k)\geq T_r(S)$, MRV orders $S$ from the first such prefix, namely $P_{k^\star_S}$. This guarantee is conditional on continued progress of the base protocol.
+
+The ordering-edge guarantee is vertex-level, same-slice, and relative to the selected committed snapshot; causal refinement also holds across slices under the exporter contract. 
+
+
+
+
+
+\begin{figure*}[t]
+  \centering
+  \includegraphics[width=0.9\textwidth]{rq3-1.pdf}
+    \caption{Execution pipeline of MRV. Operating post-consensus, MRV takes a committed execution slice $S$ as read-only input and derives a deterministic slice-local order through three local stages. (1) The Evidence Extractor accumulates creator-level structural visibility for each AUF over bounded committed rounds until a quorum threshold or observation cap is reached. (2) The Pairwise Comparator evaluates mature AUF pairs over a post-coexistence window and freezes a verdict only when the committed DAG provides unconflicted, one-sided strong evidence. (3) The Graph Assembler builds the precedence graph $G_S$ from hard causal constraints and evidence-backed verdicts, then condenses SCCs, topologically orders the DAG, and completes residual ties deterministically.}
+  \label{fig:mrv-overview}
+\end{figure*}

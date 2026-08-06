@@ -58,6 +58,12 @@ pub trait Export: Serialize {
 pub type Stake = u32;
 pub type WorkerId = u32;
 
+const DEFAULT_MRV_WINDOW: u64 = 50;
+
+fn default_mrv_window() -> u64 {
+    DEFAULT_MRV_WINDOW
+}
+
 #[derive(Deserialize, Clone)]
 pub struct Parameters {
     /// The preferred header size. The primary creates a new header when it has enough parents and
@@ -68,6 +74,9 @@ pub struct Parameters {
     pub max_header_delay: u64,
     /// The depth of the garbage collection (Denominated in number of rounds).
     pub gc_depth: u64,
+    /// The fixed MRV comparison window (Denominated in number of rounds).
+    #[serde(default = "default_mrv_window")]
+    pub mrv_window: u64,
     /// The delay after which the synchronizer retries to send sync requests. Denominated in ms.
     pub sync_retry_delay: u64,
     /// Determine with how many nodes to sync when re-trying to send sync-request. These nodes
@@ -87,6 +96,7 @@ impl Default for Parameters {
             header_size: 1_000,
             max_header_delay: 100,
             gc_depth: 50,
+            mrv_window: DEFAULT_MRV_WINDOW,
             sync_retry_delay: 5_000,
             sync_retry_nodes: 3,
             batch_size: 500_000,
@@ -102,10 +112,35 @@ impl Parameters {
         info!("Header size set to {} B", self.header_size);
         info!("Max header delay set to {} ms", self.max_header_delay);
         info!("Garbage collection depth set to {} rounds", self.gc_depth);
+        info!("MRV window set to {} rounds", self.mrv_window);
         info!("Sync retry delay set to {} ms", self.sync_retry_delay);
         info!("Sync retry nodes set to {} nodes", self.sync_retry_nodes);
         info!("Batch size set to {} B", self.batch_size);
         info!("Max batch delay set to {} ms", self.max_batch_delay);
+    }
+}
+
+#[cfg(test)]
+mod parameter_tests {
+    use super::*;
+
+    #[test]
+    fn legacy_parameters_use_independent_mrv_window_default() {
+        let parameters: Parameters = serde_json::from_str(
+            r#"{
+                "header_size": 1000,
+                "max_header_delay": 100,
+                "gc_depth": 17,
+                "sync_retry_delay": 5000,
+                "sync_retry_nodes": 3,
+                "batch_size": 500000,
+                "max_batch_delay": 100
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(parameters.gc_depth, 17);
+        assert_eq!(parameters.mrv_window, DEFAULT_MRV_WINDOW);
     }
 }
 

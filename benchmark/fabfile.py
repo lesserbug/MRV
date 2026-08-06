@@ -1,5 +1,6 @@
 # Copyright(C) Facebook, Inc. and its affiliates.
 from fabric import task
+from uuid import uuid4
 
 from benchmark.local import LocalBench
 from benchmark.logs import ParseError, LogParser
@@ -19,19 +20,27 @@ def local(ctx, debug=True):
         'rate': 50_000,
         'tx_size': 512,
         'duration': 20,
+        'drain_duration': 30,
+        'experiment_id': uuid4().hex,
     }
     node_params = {
         'header_size': 1_000,  # bytes
         'max_header_delay': 200,  # ms
         'gc_depth': 50,  # rounds
+        'mrv_window': [2, 4, 8, 16, 32],  # rounds; benchmark sweep
         'sync_retry_delay': 10_000,  # ms
         'sync_retry_nodes': 3,  # number of nodes
         'batch_size': 500_000,  # bytes
         'max_batch_delay': 200  # ms
     }
     try:
-        ret = LocalBench(bench_params, node_params).run(debug)
-        print(ret.result())
+        windows = node_params['mrv_window']
+        windows = windows if isinstance(windows, list) else [windows]
+        for mrv_window in windows:
+            params = dict(node_params)
+            params['mrv_window'] = mrv_window
+            ret = LocalBench(bench_params, params).run(debug)
+            print(ret.result())
     except BenchError as e:
         Print.error(e)
 
@@ -101,12 +110,15 @@ def remote(ctx, debug=False):
         'rate': [20_000, 40_000, 60_000, 80_000],
         'tx_size': 512,
         'duration': 60,
+        'drain_duration': 30,
+        'experiment_id': uuid4().hex,
         'runs': 1,
     }
     node_params = {
         'header_size': 1_000,  # bytes
         'max_header_delay': 200,  # ms
         'gc_depth': 50,  # rounds
+        'mrv_window': [2, 4, 8, 16, 32],  # rounds; benchmark sweep
         'sync_retry_delay': 10_000,  # ms
         'sync_retry_nodes': 3,  # number of nodes
         'batch_size': 500_000,  # bytes
@@ -127,6 +139,7 @@ def plot(ctx):
         'workers': [1],
         'collocate': True,
         'tx_size': 512,
+        'mrv_window': 4,
         'max_latency': [3_500, 4_500]
     }
     try:

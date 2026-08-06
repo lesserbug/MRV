@@ -1,12 +1,557 @@
 # Copyright(C) Facebook, Inc. and its affiliates.
+from csv import DictWriter, reader
 from datetime import datetime
 from glob import glob
+from math import isfinite
 from multiprocessing import Pool
-from os.path import join
+from os.path import basename, exists, getsize, join
 from re import findall, search
 from statistics import mean
 
+from benchmark.config import DEFAULT_MRV_WINDOW
 from benchmark.utils import Print
+
+
+MRV_SLICE_MARKER = 'MRV_SliceStats'
+MRV_REGISTERED_MARKER = 'MRV_SliceRegistered'
+MRV_RELEASE_MARKER = 'MRV_SliceRelease'
+
+MRV_INTEGER_FIELDS = (
+    'slice_id',
+    'mrv_window',
+    'slice_size',
+    'slice_max_round',
+    'seal_horizon',
+    'seal_wait_rounds',
+    'seal_delay_ms',
+    'eligible_vertex_count',
+    'ineligible_vertex_count',
+    'all_pair_count',
+    'causal_pair_count',
+    'incomparable_pair_count',
+    'eligible_pair_count',
+    'ineligible_pair_count',
+    'edge_count',
+    'conflict_count',
+    'no_signal_count',
+    'intra_scc_ordering_edge_count',
+    'inter_scc_ordering_edge_count',
+    'constrained_pair_count',
+    'scc_count',
+    'nontrivial_scc_count',
+    'vertices_in_nontrivial_sccs',
+    'max_scc_size',
+    'incomparable_pair_inversion_count',
+    'constrained_inversion_count',
+    'unconstrained_inversion_count',
+    'moved_vertex_count',
+)
+MRV_FLOAT_FIELDS = (
+    'position_displacement_median',
+    'position_displacement_p95',
+)
+MRV_OPTIONAL_INTEGER_FIELDS = ('release_delay_ms',)
+MRV_BOOLEAN_FIELDS = ('unchanged_slice',)
+MRV_RAW_FIELDS = (
+    MRV_INTEGER_FIELDS
+    + MRV_OPTIONAL_INTEGER_FIELDS
+    + MRV_BOOLEAN_FIELDS
+    + MRV_FLOAT_FIELDS
+)
+
+MRV_RATE_SPECS = (
+    ('eligibility_rate', 'eligible_vertex_count', 'slice_size'),
+    ('causal_pair_rate', 'causal_pair_count', 'all_pair_count'),
+    ('incomparable_pair_rate', 'incomparable_pair_count', 'all_pair_count'),
+    ('eligible_pair_rate', 'eligible_pair_count', 'incomparable_pair_count'),
+    ('ineligible_pair_rate', 'ineligible_pair_count', 'incomparable_pair_count'),
+    ('conflict_pair_rate', 'conflict_count', 'incomparable_pair_count'),
+    ('no_signal_pair_rate', 'no_signal_count', 'incomparable_pair_count'),
+    ('edge_yield', 'edge_count', 'eligible_pair_count'),
+    ('conflict_rate', 'conflict_count', 'eligible_pair_count'),
+    ('no_signal_rate', 'no_signal_count', 'eligible_pair_count'),
+    ('cross_scc_edge_rate', 'inter_scc_ordering_edge_count', 'edge_count'),
+    (
+        'nontrivial_scc_vertex_rate',
+        'vertices_in_nontrivial_sccs',
+        'slice_size',
+    ),
+    ('direct_edge_coverage', 'edge_count', 'incomparable_pair_count'),
+    (
+        'strict_direct_edge_coverage',
+        'inter_scc_ordering_edge_count',
+        'incomparable_pair_count',
+    ),
+    (
+        'constrained_pair_coverage',
+        'constrained_pair_count',
+        'incomparable_pair_count',
+    ),
+    (
+        'incomparable_pair_inversion_rate',
+        'incomparable_pair_inversion_count',
+        'incomparable_pair_count',
+    ),
+    (
+        'constrained_inversion_rate',
+        'constrained_inversion_count',
+        'constrained_pair_count',
+    ),
+    (
+        'unconstrained_inversion_rate',
+        'unconstrained_inversion_count',
+        'unconstrained_pair_count',
+    ),
+    ('moved_vertex_rate', 'moved_vertex_count', 'slice_size'),
+    ('average_scc_size', 'slice_size', 'scc_count'),
+)
+
+MRV_CONTEXT_FIELDS = (
+    'experiment_id',
+    'deployment',
+    'node_count',
+    'input_rate',
+    'client_target_rate',
+    'faults',
+    'run_index',
+    'replica_index',
+    'source_log',
+)
+MRV_STATUS_FIELDS = (
+    'data_status',
+    'derived_status',
+    'release_delay_status',
+    'error',
+    'raw_record',
+)
+MRV_RATE_FIELDS = tuple(
+    field for name, _, _ in MRV_RATE_SPECS for field in (name, f'{name}_status')
+)
+MRV_CSV_FIELDS = (
+    MRV_CONTEXT_FIELDS
+    + MRV_RAW_FIELDS
+    + ('unconstrained_pair_count', 'unchanged_slice_rate')
+    + MRV_RATE_FIELDS + MRV_STATUS_FIELDS
+)
+
+
+def _parse_mrv_slice_line(line):
+    """Parse one benchmark-only aggregate record without guessing fields."""
+    _, marker, body = line.partition(MRV_SLICE_MARKER)
+    if not marker:
+        raise ValueError(f'missing {MRV_SLICE_MARKER} marker')
+
+    values = {}
+    for token in body.lstrip(': ').split():
+        if token.count('=') != 1:
+            raise ValueError(f'malformed token {token!r}')
+        key, value = token.split('=', 1)
+        if key in values:
+            raise ValueError(f'duplicate field {key}')
+        values[key] = value
+
+    required = set(MRV_INTEGER_FIELDS + MRV_BOOLEAN_FIELDS + MRV_FLOAT_FIELDS)
+    missing = sorted(required - set(values))
+    if missing:
+        raise ValueError(f'missing field(s): {", ".join(missing)}')
+
+    record = {}
+    try:
+        for key in MRV_INTEGER_FIELDS:
+            record[key] = int(values[key])
+        for key in MRV_FLOAT_FIELDS:
+            record[key] = float(values[key])
+    except ValueError as e:
+        raise ValueError(f'invalid numeric field: {e}') from e
+
+    for key in MRV_BOOLEAN_FIELDS:
+        value = values[key].lower()
+        if value not in ('true', 'false'):
+            raise ValueError(f'invalid boolean field {key}={values[key]!r}')
+        record[key] = value == 'true'
+
+    if any(not isfinite(record[key]) for key in MRV_FLOAT_FIELDS):
+        raise ValueError('non-finite displacement value')
+
+    for key in MRV_OPTIONAL_INTEGER_FIELDS:
+        value = values.get(key, 'unavailable').lower()
+        if value == 'unavailable':
+            record[key] = None
+        else:
+            try:
+                record[key] = int(value)
+            except ValueError as e:
+                raise ValueError(f'invalid numeric field {key}={value!r}') from e
+
+    non_negative_fields = MRV_INTEGER_FIELDS + MRV_OPTIONAL_INTEGER_FIELDS
+    if any(record[key] is not None and record[key] < 0 for key in non_negative_fields):
+        raise ValueError('negative count, round, window, or delay')
+    if record['mrv_window'] < 1:
+        raise ValueError('mrv_window must be positive')
+
+    expected_pairs = record['slice_size'] * (record['slice_size'] - 1) // 2
+    if record['all_pair_count'] != expected_pairs:
+        raise ValueError('all_pair_count does not match slice_size')
+    if (
+        record['eligible_vertex_count'] + record['ineligible_vertex_count']
+        != record['slice_size']
+    ):
+        raise ValueError('vertex eligibility identity failed')
+
+    if record['all_pair_count'] != (
+        record['causal_pair_count'] + record['incomparable_pair_count']
+    ):
+        raise ValueError('all_pair_count identity failed')
+    if record['incomparable_pair_count'] != (
+        record['ineligible_pair_count']
+        + record['edge_count']
+        + record['conflict_count']
+        + record['no_signal_count']
+    ):
+        raise ValueError('incomparable_pair_count identity failed')
+    if record['eligible_pair_count'] != (
+        record['edge_count']
+        + record['conflict_count']
+        + record['no_signal_count']
+    ):
+        raise ValueError('eligible_pair_count identity failed')
+    if (
+        record['eligible_pair_count'] + record['ineligible_pair_count']
+        != record['incomparable_pair_count']
+    ):
+        raise ValueError('pair eligibility identity failed')
+    if (
+        record['intra_scc_ordering_edge_count']
+        + record['inter_scc_ordering_edge_count']
+        != record['edge_count']
+    ):
+        raise ValueError('ordering edge SCC identity failed')
+    if record['constrained_pair_count'] > record['incomparable_pair_count']:
+        raise ValueError('constrained_pair_count exceeds incomparable pairs')
+    if (
+        record['incomparable_pair_inversion_count']
+        > record['incomparable_pair_count']
+    ):
+        raise ValueError('inversion count exceeds incomparable pairs')
+    if record['incomparable_pair_inversion_count'] != (
+        record['constrained_inversion_count']
+        + record['unconstrained_inversion_count']
+    ):
+        raise ValueError('inversion decomposition identity failed')
+    record['unconstrained_pair_count'] = (
+        record['incomparable_pair_count'] - record['constrained_pair_count']
+    )
+    if record['constrained_inversion_count'] > record['constrained_pair_count']:
+        raise ValueError('constrained inversions exceed constrained pairs')
+    if (
+        record['unconstrained_inversion_count']
+        > record['unconstrained_pair_count']
+    ):
+        raise ValueError('unconstrained inversions exceed unconstrained pairs')
+    if record['moved_vertex_count'] > record['slice_size']:
+        raise ValueError('moved_vertex_count exceeds slice_size')
+    if record['seal_horizon'] != (
+        record['slice_max_round'] + record['mrv_window']
+    ):
+        raise ValueError('seal_horizon identity failed')
+    if record['seal_wait_rounds'] < record['mrv_window']:
+        raise ValueError('seal_wait_rounds is shorter than mrv_window')
+
+    median = record['position_displacement_median']
+    p95 = record['position_displacement_p95']
+    if not 0.0 <= median <= p95 <= 1.0:
+        raise ValueError('normalized displacement must satisfy 0 <= median <= p95 <= 1')
+    if record['unchanged_slice'] != (record['moved_vertex_count'] == 0):
+        raise ValueError('unchanged_slice and moved_vertex_count disagree')
+    if record['unchanged_slice'] and (median != 0.0 or p95 != 0.0):
+        raise ValueError('unchanged slice has non-zero displacement')
+
+    slice_size = record['slice_size']
+    scc_count = record['scc_count']
+    nontrivial_scc_count = record['nontrivial_scc_count']
+    nontrivial_vertices = record['vertices_in_nontrivial_sccs']
+    max_scc_size = record['max_scc_size']
+    if slice_size < 1:
+        raise ValueError('execution slice must be nonempty')
+    if not 1 <= scc_count <= slice_size:
+        raise ValueError('scc_count is outside slice bounds')
+    if nontrivial_scc_count > scc_count:
+        raise ValueError('nontrivial_scc_count exceeds scc_count')
+    if nontrivial_vertices > slice_size:
+        raise ValueError('vertices_in_nontrivial_sccs exceeds slice_size')
+    if slice_size != nontrivial_vertices + scc_count - nontrivial_scc_count:
+        raise ValueError('SCC vertex accounting identity failed')
+    if not 1 <= max_scc_size <= slice_size:
+        raise ValueError('max_scc_size is outside slice bounds')
+    if nontrivial_scc_count == 0:
+        if nontrivial_vertices != 0 or max_scc_size != 1:
+            raise ValueError('trivial SCC statistics disagree')
+    elif (
+        nontrivial_vertices < 2 * nontrivial_scc_count
+        or not 2 <= max_scc_size <= nontrivial_vertices
+    ):
+        raise ValueError('nontrivial SCC statistics disagree')
+
+    release_delay_ms = record['release_delay_ms']
+    if release_delay_ms is not None and release_delay_ms < record['seal_delay_ms']:
+        raise ValueError('release_delay_ms precedes seal_delay_ms')
+
+    record['data_status'] = 'valid'
+    record['release_delay_status'] = (
+        'valid' if record['release_delay_ms'] is not None else 'unavailable'
+    )
+    record['error'] = ''
+    record['raw_record'] = ''
+    record['unchanged_slice_rate'] = 1.0 if record['unchanged_slice'] else 0.0
+
+    for name, numerator, denominator in MRV_RATE_SPECS:
+        if record[denominator] == 0:
+            record[name] = ''
+            record[f'{name}_status'] = 'zero_denominator'
+        else:
+            record[name] = record[numerator] / record[denominator]
+            record[f'{name}_status'] = 'valid'
+    # A zero denominator applies only to that metric. The raw slice remains a
+    # valid row and must not be filtered out wholesale.
+    record['derived_status'] = 'valid'
+
+    return record
+
+
+def _parse_mrv_registered_line(line):
+    """Parse the lifecycle record emitted when a nonempty slice is registered."""
+    _, marker, body = line.partition(MRV_REGISTERED_MARKER)
+    if not marker:
+        raise ValueError(f'missing {MRV_REGISTERED_MARKER} marker')
+
+    values = {}
+    for token in body.lstrip(': ').split():
+        if token.count('=') != 1:
+            raise ValueError(f'malformed token {token!r}')
+        key, value = token.split('=', 1)
+        if key in values:
+            raise ValueError(f'duplicate field {key}')
+        values[key] = value
+
+    expected = {'slice_id', 'slice_size', 'seal_horizon'}
+    missing = sorted(expected - set(values))
+    unexpected = sorted(set(values) - expected)
+    if missing:
+        raise ValueError(f'missing field(s): {", ".join(missing)}')
+    if unexpected:
+        raise ValueError(f'unexpected field(s): {", ".join(unexpected)}')
+
+    try:
+        record = {key: int(values[key]) for key in expected}
+    except ValueError as e:
+        raise ValueError(f'invalid numeric field: {e}') from e
+    if record['slice_id'] < 0 or record['seal_horizon'] < 0:
+        raise ValueError('negative slice id or seal horizon')
+    if record['slice_size'] < 1:
+        raise ValueError('registered slice must be nonempty')
+    record['raw_record'] = line.strip()
+    return record
+
+
+def _parse_mrv_release_line(line):
+    """Parse one release-delay update for a previously sealed slice."""
+    _, marker, body = line.partition(MRV_RELEASE_MARKER)
+    if not marker:
+        raise ValueError(f'missing {MRV_RELEASE_MARKER} marker')
+
+    values = {}
+    for token in body.lstrip(': ').split():
+        if token.count('=') != 1:
+            raise ValueError(f'malformed token {token!r}')
+        key, value = token.split('=', 1)
+        if key in values:
+            raise ValueError(f'duplicate field {key}')
+        values[key] = value
+
+    expected = {'slice_id', 'release_delay_ms'}
+    missing = sorted(expected - set(values))
+    unexpected = sorted(set(values) - expected)
+    if missing:
+        raise ValueError(f'missing field(s): {", ".join(missing)}')
+    if unexpected:
+        raise ValueError(f'unexpected field(s): {", ".join(unexpected)}')
+
+    try:
+        slice_id = int(values['slice_id'])
+        release_delay_ms = int(values['release_delay_ms'])
+    except ValueError as e:
+        raise ValueError(f'invalid numeric field: {e}') from e
+    if slice_id < 0 or release_delay_ms < 0:
+        raise ValueError('negative slice id or release delay')
+    return slice_id, release_delay_ms
+
+
+def _reconcile_mrv_registrations(
+    slice_records,
+    registrations,
+    stats_seen_ids,
+    saw_registration_marker,
+):
+    """Expose unsealed registered slices and reject inconsistent lifecycle logs."""
+    registrations_by_slice = {}
+    for registration in registrations:
+        registrations_by_slice.setdefault(registration['slice_id'], []).append(
+            registration
+        )
+
+    valid_stats_by_slice = {}
+    for record in slice_records:
+        if record.get('data_status') == 'valid':
+            valid_stats_by_slice.setdefault(record['slice_id'], []).append(record)
+
+    for slice_id, matching_registrations in registrations_by_slice.items():
+        matching_stats = valid_stats_by_slice.get(slice_id, [])
+        if len(matching_registrations) != 1:
+            for record in matching_stats:
+                _mark_mrv_record_malformed(
+                    record, f'duplicate registration for slice_id {slice_id}'
+                )
+            duplicate = _mrv_status_record(
+                'malformed',
+                f'duplicate registration for slice_id {slice_id}',
+                matching_registrations[0]['raw_record'],
+            )
+            duplicate.update(
+                {
+                    key: matching_registrations[0][key]
+                    for key in ('slice_id', 'slice_size', 'seal_horizon')
+                }
+            )
+            slice_records.append(duplicate)
+            continue
+
+        registration = matching_registrations[0]
+        if slice_id not in stats_seen_ids:
+            censored = _mrv_status_record(
+                'right_censored',
+                f'registered slice_id {slice_id} has no {MRV_SLICE_MARKER} record',
+                registration['raw_record'],
+            )
+            censored.update(
+                {
+                    key: registration[key]
+                    for key in ('slice_id', 'slice_size', 'seal_horizon')
+                }
+            )
+            slice_records.append(censored)
+        elif len(matching_stats) == 1:
+            stats = matching_stats[0]
+            if (
+                stats['slice_size'] != registration['slice_size']
+                or stats['seal_horizon'] != registration['seal_horizon']
+            ):
+                _mark_mrv_record_malformed(
+                    stats,
+                    f'registration fields disagree for slice_id {slice_id}',
+                )
+
+    if saw_registration_marker:
+        registered_ids = set(registrations_by_slice)
+        for record in slice_records:
+            if (
+                record.get('data_status') == 'valid'
+                and record['slice_id'] not in registered_ids
+            ):
+                _mark_mrv_record_malformed(
+                    record,
+                    f'{MRV_SLICE_MARKER} has no registration for '
+                    f'slice_id {record["slice_id"]}',
+                )
+
+
+def _merge_mrv_release_updates(slice_records, release_updates):
+    """Merge valid per-primary release updates without guessing a slice."""
+    records_by_slice = {}
+    for record in slice_records:
+        if record.get('data_status') == 'valid':
+            records_by_slice.setdefault(record['slice_id'], []).append(record)
+
+    updates_by_slice = {}
+    for slice_id, release_delay_ms, raw_record in release_updates:
+        updates_by_slice.setdefault(slice_id, []).append(
+            (release_delay_ms, raw_record)
+        )
+
+    for slice_id, updates in updates_by_slice.items():
+        matching_records = records_by_slice.get(slice_id, [])
+        if not matching_records:
+            slice_records.append(
+                _mrv_status_record(
+                    'malformed',
+                    f'unknown release slice_id {slice_id}',
+                    updates[0][1],
+                )
+            )
+            continue
+        if len(matching_records) != 1:
+            for record in matching_records:
+                _mark_mrv_record_malformed(
+                    record,
+                    f'release update is ambiguous for duplicate slice_id {slice_id}',
+                )
+            continue
+
+        record = matching_records[0]
+        if len(updates) != 1 or record['release_delay_ms'] is not None:
+            _mark_mrv_record_malformed(
+                record, f'duplicate release for slice_id {slice_id}'
+            )
+            continue
+
+        release_delay_ms, _ = updates[0]
+        if release_delay_ms < record['seal_delay_ms']:
+            _mark_mrv_record_malformed(
+                record,
+                f'release_delay_ms precedes seal_delay_ms for slice_id {slice_id}',
+            )
+            continue
+        record['release_delay_ms'] = release_delay_ms
+        record['release_delay_status'] = 'valid'
+
+
+def _mrv_status_record(status, error, raw_record=''):
+    record = {
+        'data_status': status,
+        'derived_status': status,
+        'release_delay_status': status,
+        'error': error,
+        'raw_record': raw_record,
+    }
+    for name, _, _ in MRV_RATE_SPECS:
+        record[f'{name}_status'] = status
+    return record
+
+
+def _mark_mrv_record_malformed(record, error):
+    record['data_status'] = 'malformed'
+    record['derived_status'] = 'malformed'
+    record['release_delay_status'] = 'malformed'
+    record['error'] = error
+    record['unchanged_slice_rate'] = ''
+    for name, _, _ in MRV_RATE_SPECS:
+        record[name] = ''
+        record[f'{name}_status'] = 'malformed'
+
+
+def _mark_duplicate_mrv_slices(records):
+    counts = {}
+    for record in records:
+        if record.get('data_status') == 'valid':
+            slice_id = record['slice_id']
+            counts[slice_id] = counts.get(slice_id, 0) + 1
+    for record in records:
+        if (
+            record.get('data_status') == 'valid'
+            and counts[record['slice_id']] > 1
+        ):
+            _mark_mrv_record_malformed(
+                record, f'duplicate slice_id {record["slice_id"]}'
+            )
 
 
 class ParseError(Exception):
@@ -14,7 +559,20 @@ class ParseError(Exception):
 
 
 class LogParser:
-    def __init__(self, clients, primaries, workers, faults=0):
+    def __init__(
+        self,
+        clients,
+        primaries,
+        workers,
+        faults=0,
+        deployment=None,
+        node_count=None,
+        input_rate=None,
+        mrv_window=None,
+        run_index=1,
+        experiment_id='unavailable',
+        primary_indices=None,
+    ):
         inputs = [clients, primaries, workers]
         assert all(isinstance(x, list) for x in inputs)
         assert all(isinstance(x, str) for y in inputs for x in y)
@@ -27,6 +585,11 @@ class LogParser:
         else:
             self.committee_size = '?'
             self.workers = '?'
+        self.deployment = deployment or 'unavailable'
+        self.node_count = node_count if node_count is not None else self.committee_size
+        self.run_index = run_index
+        self.experiment_id = experiment_id
+        primary_indices = primary_indices or list(range(len(primaries)))
 
         # Parse the clients logs.
         try:
@@ -44,11 +607,79 @@ class LogParser:
                 results = p.map(self._parse_primaries, primaries)
         except (ValueError, IndexError, AttributeError) as e:
             raise ParseError(f'Failed to parse nodes\' logs: {e}')
-        proposals, consensus_commits, execution_commits, finalize_stats, self.configs, primary_ips = zip(*results)
+        (
+            proposals,
+            consensus_commits,
+            execution_commits,
+            slice_records,
+            self.configs,
+            primary_ips,
+        ) = zip(*results)
         self.proposals = self._merge_results([x.items() for x in proposals])
         self.consensus_commits = self._merge_results([x.items() for x in consensus_commits])
         self.execution_commits = self._merge_results([x.items() for x in execution_commits])
-        self.mrv_finalize_stats = self._merge_finalize_stats(finalize_stats)
+
+        configured_window = next(
+            (x['mrv_window'] for x in self.configs if x['mrv_window'] is not None),
+            None,
+        )
+        logged_window = next(
+            (
+                record['mrv_window']
+                for records in slice_records
+                for record in records
+                if record.get('data_status') == 'valid'
+            ),
+            None,
+        )
+        self.mrv_window = (
+            mrv_window
+            if mrv_window is not None
+            else configured_window if configured_window is not None
+            else logged_window if logged_window is not None
+            else DEFAULT_MRV_WINDOW
+        )
+        self.input_rate = input_rate if input_rate is not None else sum(self.rate)
+
+        self.mrv_slice_records = []
+        for replica_index, records, config in zip(
+            primary_indices, slice_records, self.configs
+        ):
+            for source in records:
+                record = dict(source)
+                config_window = config['mrv_window']
+                config_mismatch = (
+                    config_window is not None
+                    and config_window != self.mrv_window
+                )
+                if config_mismatch:
+                    _mark_mrv_record_malformed(
+                        record,
+                        f'primary config mrv_window {config_window} does not '
+                        f'match expected mrv_window {self.mrv_window}',
+                    )
+                elif record.get('data_status') == 'valid':
+                    if record['mrv_window'] != self.mrv_window:
+                        _mark_mrv_record_malformed(
+                            record,
+                            f'logged mrv_window {record["mrv_window"]} does not '
+                            f'match configured mrv_window {self.mrv_window}',
+                        )
+
+                context = {
+                    'experiment_id': self.experiment_id,
+                    'deployment': self.deployment,
+                    'node_count': self.node_count,
+                    'input_rate': self.input_rate,
+                    'client_target_rate': sum(self.rate),
+                    'faults': self.faults,
+                    'run_index': self.run_index,
+                    'replica_index': replica_index,
+                    'source_log': f'primary-{replica_index}.log',
+                }
+                if 'mrv_window' not in record:
+                    record['mrv_window'] = self.mrv_window
+                self.mrv_slice_records.append({**context, **record})
 
         # Parse the workers logs.
         try:
@@ -79,24 +710,6 @@ class LogParser:
                 if not k in merged or merged[k] > v:
                     merged[k] = v
         return merged
-
-    def _merge_finalize_stats(self, inputs):
-        merged = {}
-        for stats_by_batch in inputs:
-            for batch_index, stats in stats_by_batch.items():
-                current = merged.setdefault(
-                    batch_index,
-                    {key: [] for key in stats}
-                )
-                for key, value in stats.items():
-                    current[key].append(value)
-
-        return {
-            batch_index: {
-                key: mean(values) for key, values in stats.items()
-            }
-            for batch_index, stats in merged.items()
-        }
 
     def _parse_clients(self, log):
         if search(r'Error', log) is not None:
@@ -131,35 +744,69 @@ class LogParser:
         tmp = [(d, self._to_posix(t)) for t, d in tmp]
         execution_commits = self._merge_results([tmp])
 
-        tmp = findall(
-            r'MRV_FinalizeStats batch_index=(\d+) members=(\d+) min_member_round=(\d+) '
-            r'max_member_round=(\d+) batch_horizon=(\d+) wait_rounds=(\d+) '
-            r'mature_members=(\d+) capped_members=(\d+) sort_us=(\d+)',
-            log
+        slice_records = []
+        registrations = []
+        release_updates = []
+        stats_seen_ids = set()
+        saw_registration_marker = False
+        for line in log.splitlines():
+            if MRV_REGISTERED_MARKER in line:
+                saw_registration_marker = True
+                try:
+                    registrations.append(_parse_mrv_registered_line(line))
+                except ValueError as e:
+                    slice_records.append(
+                        _mrv_status_record(
+                            'malformed',
+                            f'invalid {MRV_REGISTERED_MARKER}: {e}',
+                            line.strip(),
+                        )
+                    )
+            elif MRV_SLICE_MARKER in line:
+                try:
+                    record = _parse_mrv_slice_line(line)
+                    slice_records.append(record)
+                    stats_seen_ids.add(record['slice_id'])
+                except ValueError as e:
+                    match = search(
+                        r'(?:^|\s)slice_id=(\d+)(?:\s|$)',
+                        line.partition(MRV_SLICE_MARKER)[2],
+                    )
+                    if match:
+                        stats_seen_ids.add(int(match.group(1)))
+                    slice_records.append(
+                        _mrv_status_record('malformed', str(e), line.strip())
+                    )
+            elif MRV_RELEASE_MARKER in line:
+                try:
+                    slice_id, release_delay_ms = _parse_mrv_release_line(line)
+                    release_updates.append(
+                        (slice_id, release_delay_ms, line.strip())
+                    )
+                except ValueError as e:
+                    slice_records.append(
+                        _mrv_status_record(
+                            'malformed',
+                            f'invalid {MRV_RELEASE_MARKER}: {e}',
+                            line.strip(),
+                        )
+                    )
+
+        _merge_mrv_release_updates(slice_records, release_updates)
+        _mark_duplicate_mrv_slices(slice_records)
+        _reconcile_mrv_registrations(
+            slice_records,
+            registrations,
+            stats_seen_ids,
+            saw_registration_marker,
         )
-        finalize_stats = {
-            int(batch_index): {
-                'members': int(members),
-                'min_member_round': int(min_member_round),
-                'max_member_round': int(max_member_round),
-                'batch_horizon': int(batch_horizon),
-                'wait_rounds': int(wait_rounds),
-                'mature_members': int(mature_members),
-                'capped_members': int(capped_members),
-                'sort_us': int(sort_us),
-            }
-            for (
-                batch_index,
-                members,
-                min_member_round,
-                max_member_round,
-                batch_horizon,
-                wait_rounds,
-                mature_members,
-                capped_members,
-                sort_us,
-            ) in tmp
-        }
+        if not slice_records:
+            slice_records.append(
+                _mrv_status_record(
+                    'unavailable',
+                    f'no {MRV_SLICE_MARKER} record in primary log',
+                )
+            )
 
         if not consensus_commits and not execution_commits:
             tmp = findall(r'\[(.*Z) .* Committed B\d+\([^ ]+\) -> ([^ ]+=)', log)
@@ -190,11 +837,16 @@ class LogParser:
             'max_batch_delay': int(
                 search(r'Max batch delay .* (\d+)', log).group(1)
             ),
+            'mrv_window': (
+                int(search(r'MRV window .* (\d+)', log).group(1))
+                if search(r'MRV window .* (\d+)', log) is not None
+                else None
+            ),
         }
 
         ip = search(r'booted on (\d+.\d+.\d+.\d+)', log).group(1)
         
-        return proposals, consensus_commits, execution_commits, finalize_stats, configs, ip
+        return proposals, consensus_commits, execution_commits, slice_records, configs, ip
 
     def _parse_workers(self, log):
         if search(r'(?:panic|Error)', log) is not None:
@@ -261,27 +913,6 @@ class LogParser:
                     latency += [end-start]
         return mean(latency) if latency else 0
 
-    def _mrv_post_commit_latency(self):
-        latency = [
-            self.execution_commits[d] - self.consensus_commits[d]
-            for d in self.execution_commits
-            if d in self.consensus_commits
-        ]
-        return mean(latency) if latency else 0
-
-    def _mrv_finalize_summary(self):
-        if not self.mrv_finalize_stats:
-            return None
-
-        stats = list(self.mrv_finalize_stats.values())
-        return {
-            'members': mean(x['members'] for x in stats),
-            'wait_rounds': mean(x['wait_rounds'] for x in stats),
-            'mature_members': mean(x['mature_members'] for x in stats),
-            'capped_members': mean(x['capped_members'] for x in stats),
-            'sort_us': mean(x['sort_us'] for x in stats),
-        }
-
     def result(self):
         header_size = self.configs[0]['header_size']
         max_header_delay = self.configs[0]['max_header_delay']
@@ -295,19 +926,19 @@ class LogParser:
         consensus_tps, consensus_bps, _ = self._consensus_throughput()
         end_to_end_tps, end_to_end_bps, duration = self._end_to_end_throughput()
         end_to_end_latency = self._end_to_end_latency() * 1_000
-        mrv_post_commit_latency = self._mrv_post_commit_latency() * 1_000
-        mrv_finalize_summary = self._mrv_finalize_summary()
-
-        mrv_finalize_lines = ''
-        if mrv_finalize_summary is not None:
-            mrv_finalize_lines = (
-                f' MRV avg finalized batch members: {mrv_finalize_summary["members"]:.2f}\n'
-                f' MRV avg wait rounds: {mrv_finalize_summary["wait_rounds"]:.2f}\n'
-                f' MRV avg mature/capped members: '
-                f'{mrv_finalize_summary["mature_members"]:.2f} / '
-                f'{mrv_finalize_summary["capped_members"]:.2f}\n'
-                f' MRV avg sort time: {mrv_finalize_summary["sort_us"]:,.1f} us\n'
-            )
+        valid_slices = sum(
+            x.get('data_status') == 'valid' for x in self.mrv_slice_records
+        )
+        malformed_slices = sum(
+            x.get('data_status') == 'malformed' for x in self.mrv_slice_records
+        )
+        unavailable_logs = sum(
+            x.get('data_status') == 'unavailable' for x in self.mrv_slice_records
+        )
+        right_censored_slices = sum(
+            x.get('data_status') == 'right_censored'
+            for x in self.mrv_slice_records
+        )
 
         return (
             '\n'
@@ -319,13 +950,14 @@ class LogParser:
             f' Committee size: {self.committee_size} node(s)\n'
             f' Worker(s) per node: {self.workers} worker(s)\n'
             f' Collocate primary and workers: {self.collocate}\n'
-            f' Input rate: {sum(self.rate):,} tx/s\n'
+            f' Input rate: {self.input_rate:,} tx/s\n'
             f' Transaction size: {self.size[0]:,} B\n'
             f' Execution time: {round(duration):,} s\n'
             '\n'
             f' Header size: {header_size:,} B\n'
             f' Max header delay: {max_header_delay:,} ms\n'
             f' GC depth: {gc_depth:,} round(s)\n'
+            f' MRV window: {self.mrv_window:,} round(s)\n'
             f' Sync retry delay: {sync_retry_delay:,} ms\n'
             f' Sync retry nodes: {sync_retry_nodes:,} node(s)\n'
             f' batch size: {batch_size:,} B\n'
@@ -339,8 +971,10 @@ class LogParser:
             f' End-to-end TPS: {round(end_to_end_tps):,} tx/s\n'
             f' End-to-end BPS: {round(end_to_end_bps):,} B/s\n'
             f' End-to-end latency: {round(end_to_end_latency):,} ms\n'
-            f' MRV post-commit latency: {round(mrv_post_commit_latency):,} ms\n'
-            f'{mrv_finalize_lines}'
+            f' MRV slice records: {valid_slices:,} valid, '
+            f'{malformed_slices:,} malformed, '
+            f'{unavailable_logs:,} unavailable, '
+            f'{right_censored_slices:,} right-censored\n'
             '-----------------------------------------\n'
         )
 
@@ -349,8 +983,41 @@ class LogParser:
         with open(filename, 'a') as f:
             f.write(self.result())
 
+    def print_mrv(self, filename):
+        """Append one tidy row per replica/slice (or explicit error status)."""
+        assert isinstance(filename, str)
+        write_header = not exists(filename) or getsize(filename) == 0
+        if not write_header:
+            with open(filename, newline='') as f:
+                existing_header = next(reader(f), [])
+            if existing_header != list(MRV_CSV_FIELDS):
+                raise ParseError(
+                    'MRV CSV schema differs; archive or remove the old file '
+                    'before starting this experiment'
+                )
+        with open(filename, 'a', newline='') as f:
+            writer = DictWriter(
+                f,
+                fieldnames=MRV_CSV_FIELDS,
+                extrasaction='ignore',
+                restval='',
+            )
+            if write_header:
+                writer.writeheader()
+            writer.writerows(self.mrv_slice_records)
+
     @classmethod
-    def process(cls, directory, faults=0):
+    def process(
+        cls,
+        directory,
+        faults=0,
+        deployment=None,
+        node_count=None,
+        input_rate=None,
+        mrv_window=None,
+        run_index=1,
+        experiment_id='unavailable',
+    ):
         assert isinstance(directory, str)
 
         clients = []
@@ -358,13 +1025,28 @@ class LogParser:
             with open(filename, 'r') as f:
                 clients += [f.read()]
         primaries = []
+        primary_indices = []
         for filename in sorted(glob(join(directory, 'primary-*.log'))):
             with open(filename, 'r') as f:
                 primaries += [f.read()]
+            match = search(r'primary-(\d+)\.log$', basename(filename))
+            primary_indices += [int(match.group(1)) if match else len(primary_indices)]
         workers = []
         for filename in sorted(glob(join(directory, 'worker-*.log'))):
             with open(filename, 'r') as f:
                 workers += [f.read()]
 
-        return cls(clients, primaries, workers, faults=faults)
+        return cls(
+            clients,
+            primaries,
+            workers,
+            faults=faults,
+            deployment=deployment,
+            node_count=node_count,
+            input_rate=input_rate,
+            mrv_window=mrv_window,
+            run_index=run_index,
+            experiment_id=experiment_id,
+            primary_indices=primary_indices,
+        )
 

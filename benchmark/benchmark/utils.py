@@ -82,26 +82,49 @@ class PathMaker:
         return join(PathMaker.results_path(), f'{PathMaker.system_tag()}-*.txt')
 
     @staticmethod
+    def mrv_results_file():
+        return join(
+            PathMaker.results_path(),
+            f'{PathMaker.system_tag()}-slice-stats.csv',
+        )
+
+    @staticmethod
     def plots_path():
         return 'plots'
 
     @staticmethod
-    def agg_file(type, faults, nodes, workers, collocate, rate, tx_size, max_latency=None):
+    def agg_file(
+        type,
+        faults,
+        nodes,
+        workers,
+        collocate,
+        rate,
+        tx_size,
+        max_latency=None,
+        mrv_window='any',
+    ):
         if max_latency is None:
             name = (
                 f'{PathMaker.system_tag()}-{type}-bench-'
-                f'{faults}-{nodes}-{workers}-{collocate}-{rate}-{tx_size}.txt'
+                f'{faults}-{nodes}-{workers}-{collocate}-{rate}-{tx_size}-'
+                f'w{mrv_window}.txt'
             )
         else:
             name = (
                 f'{PathMaker.system_tag()}-{type}-{max_latency}-bench-'
-                f'{faults}-{nodes}-{workers}-{collocate}-{rate}-{tx_size}.txt'
+                f'{faults}-{nodes}-{workers}-{collocate}-{rate}-{tx_size}-'
+                f'w{mrv_window}.txt'
             )
         return join(PathMaker.plots_path(), name)
 
     @staticmethod
-    def plot_file(name, ext):
-        return join(PathMaker.plots_path(), f'{PathMaker.system_tag()}-{name}.{ext}')
+    def plot_file(name, ext, mrv_window=None):
+        window = f'-w{mrv_window}' if mrv_window is not None else ''
+        return join(
+            PathMaker.plots_path(),
+            f'{PathMaker.system_tag()}-{name}{window}.{ext}',
+        )
 
 
 class Color:

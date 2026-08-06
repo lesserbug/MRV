@@ -79,7 +79,7 @@ class Ploter:
         size = int(search(r'Transaction size: (\d+)', data).group(1))
         return x * 10**6 / size
 
-    def _plot(self, x_label, y_label, y_axis, z_axis, type):
+    def _plot(self, x_label, y_label, y_axis, z_axis, type, mrv_window=None):
         plt.figure()
         markers = cycle(['o', 'v', 's', 'p', 'D', 'P'])
         self.results.sort(key=self._natural_keys, reverse=(type == 'tps'))
@@ -115,7 +115,10 @@ class Ploter:
             secaxy.yaxis.set_major_formatter(mb_major_formatter)
 
         for x in ['pdf', 'png']:
-            plt.savefig(PathMaker.plot_file(type, x), bbox_inches='tight')
+            plt.savefig(
+                PathMaker.plot_file(type, x, mrv_window=mrv_window),
+                bbox_inches='tight',
+            )
 
     @staticmethod
     def nodes(data):
@@ -139,24 +142,38 @@ class Ploter:
         return f'Max latency: {float(x) / 1000:,.1f} s {faults}'
 
     @classmethod
-    def plot_latency(cls, files, scalability):
+    def plot_latency(cls, files, scalability, mrv_window=None):
         assert isinstance(files, list)
         assert all(isinstance(x, str) for x in files)
         z_axis = cls.workers if scalability else cls.nodes
         x_label = 'Throughput (tx/s)'
         y_label = ['Latency (s)']
         ploter = cls(files)
-        ploter._plot(x_label, y_label, ploter._latency, z_axis, 'latency')
+        ploter._plot(
+            x_label,
+            y_label,
+            ploter._latency,
+            z_axis,
+            'latency',
+            mrv_window=mrv_window,
+        )
 
     @classmethod
-    def plot_tps(cls, files, scalability):
+    def plot_tps(cls, files, scalability, mrv_window=None):
         assert isinstance(files, list)
         assert all(isinstance(x, str) for x in files)
         z_axis = cls.max_latency
         x_label = 'Workers per node' if scalability else 'Committee size'
         y_label = ['Throughput (tx/s)', 'Throughput (MB/s)']
         ploter = cls(files)
-        ploter._plot(x_label, y_label, ploter._tps, z_axis, 'tps')
+        ploter._plot(
+            x_label,
+            y_label,
+            ploter._tps,
+            z_axis,
+            'tps',
+            mrv_window=mrv_window,
+        )
 
     @classmethod
     def plot(cls, params_dict):
@@ -182,6 +199,7 @@ class Ploter:
                         params.collocate,
                         'any',
                         params.tx_size,
+                        mrv_window=params.mrv_window,
                     )
                 )
 
@@ -195,9 +213,14 @@ class Ploter:
                         params.collocate,
                         'any',
                         params.tx_size,
-                        max_latency=l
+                        max_latency=l,
+                        mrv_window=params.mrv_window,
                     )
                 )
 
-        cls.plot_latency(latency_files, params.scalability())
-        cls.plot_tps(tps_files, params.scalability())
+        cls.plot_latency(
+            latency_files, params.scalability(), mrv_window=params.mrv_window
+        )
+        cls.plot_tps(
+            tps_files, params.scalability(), mrv_window=params.mrv_window
+        )

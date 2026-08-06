@@ -9,14 +9,27 @@ import os
 from benchmark.utils import PathMaker
 
 
+LEGACY_MRV_WINDOW = 'legacy-unavailable'
+
+
 class Setup:
-    def __init__(self, faults, nodes, workers, collocate, rate, tx_size):
+    def __init__(
+        self,
+        faults,
+        nodes,
+        workers,
+        collocate,
+        rate,
+        tx_size,
+        mrv_window=LEGACY_MRV_WINDOW,
+    ):
         self.nodes = nodes
         self.workers = workers
         self.collocate = collocate
         self.rate = rate
         self.tx_size = tx_size
         self.faults = faults
+        self.mrv_window = mrv_window
         self.max_latency = 'any'
 
     def __str__(self):
@@ -27,6 +40,7 @@ class Setup:
             f' Collocate primary and workers: {self.collocate}\n'
             f' Input rate: {self.rate} tx/s\n'
             f' Transaction size: {self.tx_size} B\n'
+            f' MRV window: {self.mrv_window} rounds\n'
             f' Max latency: {self.max_latency} ms\n'
         )
 
@@ -46,7 +60,20 @@ class Setup:
         ).group(1)
         rate = int(search(r'Input rate: (\d+)', raw).group(1))
         tx_size = int(search(r'Transaction size: (\d+)', raw).group(1))
-        return cls(faults, nodes, workers, collocate, rate, tx_size)
+        match = search(r'MRV window: (\d+)', raw)
+        # Summaries produced by the legacy MRV executor have no W
+        # field. Keep them in an explicit legacy group so they cannot be
+        # averaged with fixed-window MRV v1 runs that happen to use W=50.
+        mrv_window = int(match.group(1)) if match else LEGACY_MRV_WINDOW
+        return cls(
+            faults,
+            nodes,
+            workers,
+            collocate,
+            rate,
+            tx_size,
+            mrv_window,
+        )
 
 
 class Result:
@@ -134,6 +161,7 @@ class LogAggregator:
                     setup.rate,
                     setup.tx_size,
                     max_latency=None if max_lat == 'any' else max_lat,
+                    mrv_window=setup.mrv_window,
                 )
                 with open(filename, 'w') as f:
                     f.write(string)
