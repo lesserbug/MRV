@@ -140,7 +140,7 @@ pub struct MrvExecutor {
     delta_threshold: i64,   // theta = f + 1
 
     #[cfg(feature = "benchmark")]
-    seen_slice_members: HashSet<Digest>,
+    seen_slice_members: HashMap<Digest, u64>,
     #[cfg(feature = "benchmark")]
     cumulative_member_count: u64,
     #[cfg(feature = "benchmark")]
@@ -178,7 +178,7 @@ impl MrvExecutor {
                 reach_threshold,
                 delta_threshold,
                 #[cfg(feature = "benchmark")]
-                seen_slice_members: HashSet::new(),
+                seen_slice_members: HashMap::new(),
                 #[cfg(feature = "benchmark")]
                 cumulative_member_count: 0,
                 #[cfg(feature = "benchmark")]
@@ -230,14 +230,20 @@ impl MrvExecutor {
         }
 
         #[cfg(feature = "benchmark")]
-        for member in &members {
-            if !self.seen_slice_members.insert(member.clone()) {
+        for certificate in &certificates {
+            let member = certificate.digest();
+            if let Some(first_slice_id) = self.seen_slice_members.get(&member) {
                 error!(
-                    "MRV_ExactOnceViolation slice_id={} member_digest={:?}",
-                    slice_id, member
+                    "MRV_ExactOnceViolation first_slice_id={} duplicate_slice_id={} member_digest={:?} member_round={} member_creator={:?}",
+                    first_slice_id,
+                    slice_id,
+                    member,
+                    certificate.round(),
+                    certificate.origin(),
                 );
                 panic!("MRV exact-once membership invariant violated");
             }
+            self.seen_slice_members.insert(member, slice_id);
         }
 
         #[cfg(feature = "benchmark")]
@@ -1358,7 +1364,7 @@ mod tests {
                 reach_threshold: 2 * f + 1,
                 delta_threshold: (f + 1) as i64,
                 #[cfg(feature = "benchmark")]
-                seen_slice_members: HashSet::new(),
+                seen_slice_members: HashMap::new(),
                 #[cfg(feature = "benchmark")]
                 cumulative_member_count: 0,
                 #[cfg(feature = "benchmark")]

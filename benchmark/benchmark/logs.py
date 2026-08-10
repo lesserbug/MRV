@@ -143,6 +143,10 @@ MRV_STATUS_FIELDS = (
     'mismatch_class',
     'lifecycle_reason',
     'member_digest',
+    'first_slice_id',
+    'duplicate_slice_id',
+    'member_round',
+    'member_creator',
     'observed_replica_count',
     'expected_replica_count',
     'snapshot_frontier_mismatch',
@@ -449,9 +453,16 @@ def _parse_mrv_diagnostic_line(line, marker):
             raise ValueError(f'duplicate field {key}')
         values[key] = value
 
-    expected = {'slice_id', 'member_digest'}
-    if marker == MRV_LIFECYCLE_MARKER:
-        expected.add('reason')
+    if marker == MRV_EXACT_ONCE_MARKER:
+        expected = {
+            'first_slice_id',
+            'duplicate_slice_id',
+            'member_digest',
+            'member_round',
+            'member_creator',
+        }
+    else:
+        expected = {'slice_id', 'member_digest', 'reason'}
     missing = sorted(expected - set(values))
     unexpected = sorted(set(values) - expected)
     if missing:
@@ -460,11 +471,29 @@ def _parse_mrv_diagnostic_line(line, marker):
         raise ValueError(f'unexpected field(s): {", ".join(unexpected)}')
 
     try:
-        slice_id = int(values['slice_id'])
+        slice_id = int(
+            values[
+                'duplicate_slice_id'
+                if marker == MRV_EXACT_ONCE_MARKER
+                else 'slice_id'
+            ]
+        )
+        first_slice_id = (
+            int(values['first_slice_id'])
+            if marker == MRV_EXACT_ONCE_MARKER
+            else None
+        )
+        member_round = (
+            int(values['member_round'])
+            if marker == MRV_EXACT_ONCE_MARKER
+            else None
+        )
     except ValueError as e:
         raise ValueError(f'invalid slice_id: {e}') from e
-    if slice_id < 0:
+    if slice_id < 0 or (first_slice_id is not None and first_slice_id < 0):
         raise ValueError('negative slice id')
+    if member_round is not None and member_round < 0:
+        raise ValueError('negative member round')
 
     record = _mrv_status_record(
         'diagnostic_failure',
@@ -475,6 +504,12 @@ def _parse_mrv_diagnostic_line(line, marker):
         {
             'slice_id': slice_id,
             'member_digest': values['member_digest'],
+            'first_slice_id': first_slice_id if first_slice_id is not None else '',
+            'duplicate_slice_id': (
+                slice_id if marker == MRV_EXACT_ONCE_MARKER else ''
+            ),
+            'member_round': member_round if member_round is not None else '',
+            'member_creator': values.get('member_creator', ''),
             'mismatch_class': (
                 'EXACT_ONCE_VIOLATION'
                 if marker == MRV_EXACT_ONCE_MARKER

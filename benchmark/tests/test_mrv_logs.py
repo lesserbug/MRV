@@ -277,8 +277,11 @@ class MrvSliceParserTests(unittest.TestCase):
         log = '\n'.join(
             (
                 valid_primary_config_log(),
-                '[ERROR] MRV_ExactOnceViolation slice_id=7 '
-                'member_digest=bWVtYmVyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+                '[ERROR] MRV_ExactOnceViolation first_slice_id=3 '
+                'duplicate_slice_id=7 '
+                'member_digest=bWVtYmVyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= '
+                'member_round=11 '
+                'member_creator=Y3JlYXRvcgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
                 "thread 'tokio-runtime-worker' panicked",
             )
         )
@@ -288,6 +291,9 @@ class MrvSliceParserTests(unittest.TestCase):
         self.assertEqual(records[0]['data_status'], 'diagnostic_failure')
         self.assertEqual(records[0]['mismatch_class'], 'EXACT_ONCE_VIOLATION')
         self.assertEqual(records[0]['slice_id'], 7)
+        self.assertEqual(records[0]['first_slice_id'], 3)
+        self.assertEqual(records[0]['duplicate_slice_id'], 7)
+        self.assertEqual(records[0]['member_round'], 11)
 
     def test_primary_parser_preserves_lifecycle_reason_when_primary_panics(self):
         parser = LogParser.__new__(LogParser)

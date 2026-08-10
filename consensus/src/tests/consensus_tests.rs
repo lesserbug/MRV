@@ -344,3 +344,61 @@ async fn missing_leader() {
     let certificate = next_committed_certificate(&mut rx_output, &mut committed).await;
     assert_eq!(certificate.round(), 4);
 }
+
+#[tokio::test]
+async fn stale_certificate_is_not_exported_after_a_higher_creator_round() {
+    let mut names: Vec<_> = keys().into_iter().map(|(name, _)| name).collect();
+    names.sort();
+    let committee = mock_committee();
+    let genesis = Certificate::genesis(&committee)
+        .iter()
+        .map(|certificate| certificate.digest())
+        .collect::<BTreeSet<_>>();
+    let (certificates, _) = make_certificates(1, 9, &genesis, &names);
+    let stale = certificates
+        .iter()
+        .find(|certificate| certificate.round() == 1 && certificate.origin() == names[0])
+        .expect("round-1 leader certificate must exist")
+        .clone();
+    let stale_digest = stale.digest();
+    let (early, late): (Vec<_>, Vec<_>) = certificates
+        .into_iter()
+        .partition(|certificate| certificate.round() <= 5);
+
+    let (tx_waiter, rx_waiter) = channel(64);
+    let (tx_primary, mut rx_primary) = channel(16);
+    let (tx_output, mut rx_output) = channel(16);
+    Consensus::spawn(committee, 50, rx_waiter, tx_primary, tx_output);
+    tokio::spawn(async move { while rx_primary.recv().await.is_some() {} });
+
+    for certificate in early {
+        tx_waiter.send(certificate).await.unwrap();
+    }
+    let first_batch = rx_output.recv().await.unwrap();
+    assert!(first_batch
+        .certificates
+        .iter()
+        .any(|certificate| certificate.digest() == stale_digest));
+    assert!(first_batch.certificates.iter().any(|certificate| {
+        certificate.origin() == stale.origin() && certificate.round() > stale.round()
+    }));
+
+    // Re-deliver the old certificate only after this creator has advanced.
+    tx_waiter.send(stale).await.unwrap();
+    for certificate in late {
+        tx_waiter.send(certificate).await.unwrap();
+    }
+    drop(tx_waiter);
+
+    let mut delivered = first_batch.certificates;
+    while let Some(batch) = rx_output.recv().await {
+        delivered.extend(batch.certificates);
+    }
+    assert_eq!(
+        delivered
+            .iter()
+            .filter(|certificate| certificate.digest() == stale_digest)
+            .count(),
+        1
+    );
+}
