@@ -1,11 +1,17 @@
 use std::cmp::{Ordering, Reverse};
 use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
 #[cfg(feature = "benchmark")]
+use std::convert::TryInto;
+#[cfg(feature = "benchmark")]
 use std::time::Instant;
 
 use consensus::CommittedSubDag;
 use crypto::Hash as _;
 use crypto::PublicKey;
+#[cfg(feature = "benchmark")]
+use ed25519_dalek::{Digest as _, Sha512};
+#[cfg(feature = "benchmark")]
+use log::error;
 use log::{debug, info, warn};
 use primary::Certificate;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -96,6 +102,9 @@ struct OrderingMetrics {
 struct SealedMetrics {
     ordering: OrderingMetrics,
     snapshot_round: Round,
+    trigger_slice_id: u64,
+    trigger_export_prefix_digest: Digest,
+    execution_order_digest: Digest,
     seal_delay_ms: u128,
 }
 
@@ -129,6 +138,13 @@ pub struct MrvExecutor {
     mrv_window: Round,
     reach_threshold: usize, // q_vis = 2f + 1
     delta_threshold: i64,   // theta = f + 1
+
+    #[cfg(feature = "benchmark")]
+    seen_slice_members: HashSet<Digest>,
+    #[cfg(feature = "benchmark")]
+    cumulative_member_count: u64,
+    #[cfg(feature = "benchmark")]
+    export_prefix_digest: Digest,
 }
 
 impl MrvExecutor {
@@ -161,6 +177,12 @@ impl MrvExecutor {
                 mrv_window,
                 reach_threshold,
                 delta_threshold,
+                #[cfg(feature = "benchmark")]
+                seen_slice_members: HashSet::new(),
+                #[cfg(feature = "benchmark")]
+                cumulative_member_count: 0,
+                #[cfg(feature = "benchmark")]
+                export_prefix_digest: Digest::default(),
             };
             executor.run().await;
         });
@@ -188,6 +210,10 @@ impl MrvExecutor {
         );
 
         let slice_id = committed_slice.batch_index;
+        #[cfg(feature = "benchmark")]
+        let leader_round = committed_slice.leader_round;
+        #[cfg(feature = "benchmark")]
+        let leader_digest = committed_slice.leader_digest;
         let mut certificates = committed_slice.certificates;
         let members: Vec<Digest> = certificates
             .iter()
@@ -202,6 +228,41 @@ impl MrvExecutor {
         if members.is_empty() {
             return Ok(());
         }
+
+        #[cfg(feature = "benchmark")]
+        for member in &members {
+            if !self.seen_slice_members.insert(member.clone()) {
+                error!(
+                    "MRV_ExactOnceViolation slice_id={} member_digest={:?}",
+                    slice_id, member
+                );
+                panic!("MRV exact-once membership invariant violated");
+            }
+        }
+
+        #[cfg(feature = "benchmark")]
+        let (member_set_digest, member_order_digest, export_prefix_digest) = {
+            let member_order_digest = fingerprint_digests(b"MRV-MEMBER-ORDER-v1", &members);
+            let mut sorted_members = members.clone();
+            sorted_members.sort();
+            let member_set_digest = fingerprint_digests(b"MRV-MEMBER-SET-v1", &sorted_members);
+
+            self.cumulative_member_count += members.len() as u64;
+            let mut hasher = Sha512::new();
+            hasher.update(b"MRV-EXPORT-PREFIX-v1");
+            hasher.update(self.export_prefix_digest.as_ref());
+            hasher.update(leader_round.to_le_bytes());
+            hasher.update(leader_digest.as_ref());
+            hasher.update(member_set_digest.as_ref());
+            let export_prefix_digest = crypto::Digest(
+                hasher.finalize()[..32]
+                    .try_into()
+                    .expect("SHA-512 output must contain 32 bytes"),
+            );
+            self.export_prefix_digest = export_prefix_digest.clone();
+
+            (member_set_digest, member_order_digest, export_prefix_digest)
+        };
 
         // A CommittedSubDag is one immutable exporter event. Process the whole
         // event before sealing so every decision uses exactly one prefix P_k.
@@ -225,10 +286,16 @@ impl MrvExecutor {
         let seal_horizon = max_round.saturating_add(self.mrv_window);
         #[cfg(feature = "benchmark")]
         info!(
-            "MRV_SliceRegistered slice_id={} slice_size={} seal_horizon={}",
+            "MRV_SliceRegistered slice_id={} leader_round={} leader_digest={:?} slice_size={} seal_horizon={} member_set_digest={:?} member_order_digest={:?} cumulative_member_count={} export_prefix_digest={:?}",
             slice_id,
+            leader_round,
+            leader_digest,
             members.len(),
             seal_horizon,
+            member_set_digest,
+            member_order_digest,
+            self.cumulative_member_count,
+            export_prefix_digest,
         );
         let previous = self.slices.insert(
             slice_id,
@@ -243,10 +310,12 @@ impl MrvExecutor {
         );
         debug_assert!(previous.is_none(), "slice ids must be unique");
 
-        let sealed_any = self.seal_ready_slices();
+        let sealed_any = self.seal_ready_slices(slice_id);
         self.release_ready_slices().await?;
         if sealed_any {
             self.garbage_collect_store();
+            #[cfg(feature = "benchmark")]
+            self.assert_member_lifecycle();
         }
         Ok(())
     }
@@ -304,7 +373,9 @@ impl MrvExecutor {
         self.active_floor_round = self.auf_states.values().map(|state| state.round).min();
     }
 
-    fn seal_ready_slices(&mut self) -> bool {
+    fn seal_ready_slices(&mut self, trigger_slice_id: u64) -> bool {
+        #[cfg(not(feature = "benchmark"))]
+        let _ = trigger_slice_id;
         let ready: Vec<u64> = self
             .slices
             .iter()
@@ -324,6 +395,9 @@ impl MrvExecutor {
                 .clone();
 
             let ordering = self.order_slice(&members);
+            #[cfg(feature = "benchmark")]
+            let execution_order_digest =
+                fingerprint_digests(b"MRV-EXECUTION-ORDER-v1", &ordering.order);
             let sealed = SealedSlice {
                 ordered_sccs: ordering.ordered_sccs,
                 order: ordering.order,
@@ -331,6 +405,9 @@ impl MrvExecutor {
                 metrics: SealedMetrics {
                     ordering: ordering.metrics,
                     snapshot_round: self.frontier_round,
+                    trigger_slice_id,
+                    trigger_export_prefix_digest: self.export_prefix_digest.clone(),
+                    execution_order_digest,
                     seal_delay_ms: self
                         .slices
                         .get(&slice_id)
@@ -351,6 +428,8 @@ impl MrvExecutor {
             // Later prefixes must not update or reconstruct evidence for a
             // sealed slice. Its final SCC and execution orders are sufficient.
             self.release_evidence(&members);
+            #[cfg(feature = "benchmark")]
+            self.assert_member_lifecycle();
 
             #[cfg(feature = "benchmark")]
             {
@@ -441,6 +520,40 @@ impl MrvExecutor {
             queued_outputs.contains(digest)
                 || active_floor.map_or(false, |floor| certificate.round() >= floor)
         });
+    }
+
+    #[cfg(feature = "benchmark")]
+    fn assert_member_lifecycle(&self) {
+        for (&slice_id, slice) in &self.slices {
+            if let Some(sealed) = &slice.sealed {
+                for member in &sealed.order {
+                    if !self.store.contains_key(member) {
+                        error!(
+                            "MRV_MemberLifecycleViolation reason=missing_queued_output_store slice_id={} member_digest={:?}",
+                            slice_id, member
+                        );
+                        panic!("MRV queued output member is missing from the committed store");
+                    }
+                }
+            } else {
+                for member in &slice.members {
+                    if !self.store.contains_key(member) {
+                        error!(
+                            "MRV_MemberLifecycleViolation reason=missing_unsealed_store slice_id={} member_digest={:?}",
+                            slice_id, member
+                        );
+                        panic!("MRV unsealed member is missing from the committed store");
+                    }
+                    if !self.auf_states.contains_key(member) {
+                        error!(
+                            "MRV_MemberLifecycleViolation reason=missing_unsealed_auf_state slice_id={} member_digest={:?}",
+                            slice_id, member
+                        );
+                        panic!("MRV unsealed member is missing visibility state");
+                    }
+                }
+            }
+        }
     }
 
     fn order_slice(&self, members: &[Digest]) -> SliceOrdering {
@@ -1136,7 +1249,7 @@ impl MrvExecutor {
     fn log_slice_metrics(&self, slice_id: u64, slice: &SliceState, sealed: &SealedMetrics) {
         let metrics = &sealed.ordering;
         info!(
-            "MRV_SliceStats slice_id={} mrv_window={} slice_size={} slice_max_round={} seal_horizon={} seal_wait_rounds={} seal_delay_ms={} release_delay_ms={} eligible_vertex_count={} ineligible_vertex_count={} all_pair_count={} causal_pair_count={} incomparable_pair_count={} eligible_pair_count={} ineligible_pair_count={} edge_count={} conflict_count={} no_signal_count={} intra_scc_ordering_edge_count={} inter_scc_ordering_edge_count={} constrained_pair_count={} scc_count={} nontrivial_scc_count={} vertices_in_nontrivial_sccs={} max_scc_size={} incomparable_pair_inversion_count={} constrained_inversion_count={} unconstrained_inversion_count={} moved_vertex_count={} unchanged_slice={} position_displacement_median={:.6} position_displacement_p95={:.6}",
+            "MRV_SliceStats slice_id={} mrv_window={} slice_size={} slice_max_round={} seal_horizon={} seal_wait_rounds={} seal_delay_ms={} release_delay_ms={} snapshot_frontier={} trigger_slice_id={} trigger_export_prefix_digest={:?} execution_order_digest={:?} eligible_vertex_count={} ineligible_vertex_count={} all_pair_count={} causal_pair_count={} incomparable_pair_count={} eligible_pair_count={} ineligible_pair_count={} edge_count={} conflict_count={} no_signal_count={} intra_scc_ordering_edge_count={} inter_scc_ordering_edge_count={} constrained_pair_count={} scc_count={} nontrivial_scc_count={} vertices_in_nontrivial_sccs={} max_scc_size={} incomparable_pair_inversion_count={} constrained_inversion_count={} unconstrained_inversion_count={} moved_vertex_count={} unchanged_slice={} position_displacement_median={:.6} position_displacement_p95={:.6}",
             slice_id,
             self.mrv_window,
             metrics.eligible_vertex_count + metrics.ineligible_vertex_count,
@@ -1145,6 +1258,10 @@ impl MrvExecutor {
             sealed.snapshot_round.saturating_sub(slice.max_round),
             sealed.seal_delay_ms,
             "unavailable",
+            sealed.snapshot_round,
+            sealed.trigger_slice_id,
+            sealed.trigger_export_prefix_digest,
+            sealed.execution_order_digest,
             metrics.eligible_vertex_count,
             metrics.ineligible_vertex_count,
             metrics.all_pair_count,
@@ -1171,6 +1288,21 @@ impl MrvExecutor {
             metrics.position_displacement_p95,
         );
     }
+}
+
+#[cfg(feature = "benchmark")]
+fn fingerprint_digests(domain: &[u8], digests: &[Digest]) -> Digest {
+    let mut hasher = Sha512::new();
+    hasher.update(domain);
+    hasher.update((digests.len() as u64).to_le_bytes());
+    for digest in digests {
+        hasher.update(digest.as_ref());
+    }
+    crypto::Digest(
+        hasher.finalize()[..32]
+            .try_into()
+            .expect("SHA-512 output must contain 32 bytes"),
+    )
 }
 
 #[cfg(test)]
@@ -1225,6 +1357,12 @@ mod tests {
                 mrv_window: mrv_window.max(1),
                 reach_threshold: 2 * f + 1,
                 delta_threshold: (f + 1) as i64,
+                #[cfg(feature = "benchmark")]
+                seen_slice_members: HashSet::new(),
+                #[cfg(feature = "benchmark")]
+                cumulative_member_count: 0,
+                #[cfg(feature = "benchmark")]
+                export_prefix_digest: Digest::default(),
             },
             rx_output,
         )
@@ -1272,6 +1410,70 @@ mod tests {
             leader_digest: leader.digest(),
             certificates,
         }
+    }
+
+    #[cfg(feature = "benchmark")]
+    #[test]
+    fn diagnostic_fingerprints_separate_member_set_and_orders() {
+        let a = raw_digest(1);
+        let b = raw_digest(2);
+        let first_order = vec![a.clone(), b.clone()];
+        let second_order = vec![b, a];
+        let mut first_set = first_order.clone();
+        first_set.sort();
+        let mut second_set = second_order.clone();
+        second_set.sort();
+
+        assert_eq!(
+            fingerprint_digests(b"MRV-MEMBER-SET-v1", &first_set),
+            fingerprint_digests(b"MRV-MEMBER-SET-v1", &second_set),
+        );
+        assert_ne!(
+            fingerprint_digests(b"MRV-MEMBER-ORDER-v1", &first_order),
+            fingerprint_digests(b"MRV-MEMBER-ORDER-v1", &second_order),
+        );
+        assert_ne!(
+            fingerprint_digests(b"MRV-MEMBER-ORDER-v1", &first_order),
+            fingerprint_digests(b"MRV-EXECUTION-ORDER-v1", &first_order),
+        );
+    }
+
+    #[cfg(feature = "benchmark")]
+    #[tokio::test]
+    #[should_panic(expected = "MRV exact-once membership invariant violated")]
+    async fn duplicate_slice_membership_fails_immediately() {
+        let (mut executor, _) = test_executor(1, 2);
+        let member = certificate(1, 1, 1, []);
+        executor
+            .on_committed_slice(committed_slice(1, vec![member.clone()]))
+            .await
+            .unwrap();
+        executor
+            .on_committed_slice(committed_slice(2, vec![member]))
+            .await
+            .unwrap();
+    }
+
+    #[cfg(feature = "benchmark")]
+    #[test]
+    #[should_panic(expected = "MRV unsealed member is missing visibility state")]
+    fn lifecycle_check_rejects_missing_unsealed_visibility_state() {
+        let (mut executor, _) = test_executor(1, 2);
+        let member_certificate = certificate(1, 1, 1, []);
+        let member = member_certificate.digest();
+        executor.store.insert(member.clone(), member_certificate);
+        executor.slices.insert(
+            1,
+            SliceState {
+                members: vec![member],
+                max_round: 1,
+                seal_horizon: 3,
+                sealed: None,
+                registered_at: Instant::now(),
+            },
+        );
+
+        executor.assert_member_lifecycle();
     }
 
     #[tokio::test]

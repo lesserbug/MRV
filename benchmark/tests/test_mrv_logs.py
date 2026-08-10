@@ -6,7 +6,12 @@ import unittest
 
 from benchmark.config import BenchParameters, DEFAULT_MRV_WINDOW, NodeParameters
 from benchmark.aggregate import LEGACY_MRV_WINDOW, Setup
-from benchmark.logs import LogParser, ParseError, _parse_mrv_slice_line
+from benchmark.logs import (
+    LogParser,
+    ParseError,
+    _classify_mrv_cross_replica,
+    _parse_mrv_slice_line,
+)
 from benchmark.utils import PathMaker
 
 
@@ -20,6 +25,10 @@ def valid_slice_line(**overrides):
         'seal_wait_rounds': 4,
         'seal_delay_ms': 27,
         'release_delay_ms': 'unavailable',
+        'snapshot_frontier': 14,
+        'trigger_slice_id': 9,
+        'trigger_export_prefix_digest': 'cHJlZml4AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+        'execution_order_digest': 'ZXhlY3V0aW9uAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
         'eligible_vertex_count': 3,
         'ineligible_vertex_count': 1,
         'all_pair_count': 6,
@@ -53,8 +62,14 @@ def valid_slice_line(**overrides):
 def registered_slice_line(**overrides):
     fields = {
         'slice_id': 7,
+        'leader_round': 10,
+        'leader_digest': 'bGVhZGVyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
         'slice_size': 4,
         'seal_horizon': 14,
+        'member_set_digest': 'c2V0AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+        'member_order_digest': 'b3JkZXIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+        'cumulative_member_count': 20,
+        'export_prefix_digest': 'ZXhwb3J0AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
     }
     fields.update(overrides)
     values = ' '.join(f'{key}={value}' for key, value in fields.items())
@@ -251,6 +266,123 @@ class MrvSliceParserTests(unittest.TestCase):
         self.assertEqual(records[0]['slice_id'], 7)
         self.assertEqual(records[0]['slice_size'], 4)
         self.assertEqual(records[0]['seal_horizon'], 14)
+        self.assertEqual(records[0]['leader_round'], 10)
+        self.assertEqual(
+            records[0]['export_prefix_digest'],
+            'ZXhwb3J0AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+        )
+
+    def test_primary_parser_preserves_exact_once_marker_when_primary_panics(self):
+        parser = LogParser.__new__(LogParser)
+        log = '\n'.join(
+            (
+                valid_primary_config_log(),
+                '[ERROR] MRV_ExactOnceViolation slice_id=7 '
+                'member_digest=bWVtYmVyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+                "thread 'tokio-runtime-worker' panicked",
+            )
+        )
+
+        records = parser._parse_primaries(log)[3]
+
+        self.assertEqual(records[0]['data_status'], 'diagnostic_failure')
+        self.assertEqual(records[0]['mismatch_class'], 'EXACT_ONCE_VIOLATION')
+        self.assertEqual(records[0]['slice_id'], 7)
+
+    def test_primary_parser_preserves_lifecycle_reason_when_primary_panics(self):
+        parser = LogParser.__new__(LogParser)
+        log = '\n'.join(
+            (
+                valid_primary_config_log(),
+                '[ERROR] MRV_MemberLifecycleViolation '
+                'reason=missing_unsealed_auf_state slice_id=8 '
+                'member_digest=bWVtYmVyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+                "thread 'tokio-runtime-worker' panicked",
+            )
+        )
+
+        record = parser._parse_primaries(log)[3][0]
+
+        self.assertEqual(record['data_status'], 'diagnostic_failure')
+        self.assertEqual(record['mismatch_class'], 'MEMBER_LIFECYCLE_VIOLATION')
+        self.assertEqual(record['lifecycle_reason'], 'missing_unsealed_auf_state')
+
+    def test_cross_replica_classification_separates_base_prefix_and_execution(self):
+        records = []
+        for slice_id in (1, 2, 3, 4, 5):
+            for replica_index in (0, 1):
+                record = _parse_mrv_slice_line(
+                    valid_slice_line(slice_id=slice_id)
+                )
+                record.update(
+                    {
+                        'experiment_id': 'experiment-a',
+                        'deployment': 'remote',
+                        'node_count': 2,
+                        'input_rate': 50_000,
+                        'faults': 0,
+                        'run_index': 1,
+                        'replica_index': replica_index,
+                        'leader_round': 10,
+                        'leader_digest': 'leader=',
+                        'member_set_digest': 'set=',
+                        'member_order_digest': 'order=',
+                        'cumulative_member_count': 20,
+                        'export_prefix_digest': 'export=',
+                    }
+                )
+                if slice_id == 1 and replica_index == 1:
+                    record['member_order_digest'] = 'different-order='
+                if slice_id == 2 and replica_index == 1:
+                    record['trigger_export_prefix_digest'] = 'different-prefix='
+                if slice_id == 3 and replica_index == 1:
+                    record['execution_order_digest'] = 'different-execution='
+                if slice_id == 4 and replica_index == 1:
+                    record['leader_digest'] = 'different-leader='
+                if slice_id == 5 and replica_index == 1:
+                    record['member_set_digest'] = 'different-set='
+                records.append(record)
+
+        _classify_mrv_cross_replica(records)
+
+        classes = {
+            slice_id: {
+                record['mismatch_class']
+                for record in records
+                if record['slice_id'] == slice_id
+            }
+            for slice_id in (1, 2, 3, 4, 5)
+        }
+        self.assertEqual(classes[1], {'BASE_ORDER_MISMATCH'})
+        self.assertEqual(classes[2], {'SEAL_PREFIX_MISMATCH'})
+        self.assertEqual(classes[3], {'EXECUTION_ORDER_MISMATCH'})
+        self.assertEqual(classes[4], {'LEADER_MAPPING_MISMATCH'})
+        self.assertEqual(classes[5], {'MEMBER_SET_MISMATCH'})
+        self.assertTrue(
+            all(
+                not record['snapshot_frontier_mismatch']
+                for record in records
+                if record['slice_id'] == 2
+            )
+        )
+
+    def test_cross_replica_classification_does_not_call_incomplete_consistent(self):
+        record = _parse_mrv_slice_line(valid_slice_line())
+        record.update(
+            {
+                'experiment_id': 'experiment-a',
+                'deployment': 'remote',
+                'node_count': 2,
+                'input_rate': 50_000,
+                'faults': 0,
+                'run_index': 1,
+                'replica_index': 0,
+            }
+        )
+
+        _classify_mrv_cross_replica([record])
+
+        self.assertEqual(record['cross_replica_status'], 'incomplete')
 
     def test_primary_parser_rejects_registration_stats_mismatch(self):
         parser = LogParser.__new__(LogParser)

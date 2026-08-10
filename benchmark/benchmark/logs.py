@@ -15,6 +15,8 @@ from benchmark.utils import Print
 MRV_SLICE_MARKER = 'MRV_SliceStats'
 MRV_REGISTERED_MARKER = 'MRV_SliceRegistered'
 MRV_RELEASE_MARKER = 'MRV_SliceRelease'
+MRV_EXACT_ONCE_MARKER = 'MRV_ExactOnceViolation'
+MRV_LIFECYCLE_MARKER = 'MRV_MemberLifecycleViolation'
 
 MRV_INTEGER_FIELDS = (
     'slice_id',
@@ -24,6 +26,8 @@ MRV_INTEGER_FIELDS = (
     'seal_horizon',
     'seal_wait_rounds',
     'seal_delay_ms',
+    'snapshot_frontier',
+    'trigger_slice_id',
     'eligible_vertex_count',
     'ineligible_vertex_count',
     'all_pair_count',
@@ -52,11 +56,25 @@ MRV_FLOAT_FIELDS = (
 )
 MRV_OPTIONAL_INTEGER_FIELDS = ('release_delay_ms',)
 MRV_BOOLEAN_FIELDS = ('unchanged_slice',)
+MRV_STATS_DIGEST_FIELDS = (
+    'trigger_export_prefix_digest',
+    'execution_order_digest',
+)
+MRV_REGISTRATION_FIELDS = (
+    'leader_round',
+    'leader_digest',
+    'member_set_digest',
+    'member_order_digest',
+    'cumulative_member_count',
+    'export_prefix_digest',
+)
 MRV_RAW_FIELDS = (
     MRV_INTEGER_FIELDS
     + MRV_OPTIONAL_INTEGER_FIELDS
     + MRV_BOOLEAN_FIELDS
     + MRV_FLOAT_FIELDS
+    + MRV_STATS_DIGEST_FIELDS
+    + MRV_REGISTRATION_FIELDS
 )
 
 MRV_RATE_SPECS = (
@@ -121,6 +139,13 @@ MRV_STATUS_FIELDS = (
     'data_status',
     'derived_status',
     'release_delay_status',
+    'cross_replica_status',
+    'mismatch_class',
+    'lifecycle_reason',
+    'member_digest',
+    'observed_replica_count',
+    'expected_replica_count',
+    'snapshot_frontier_mismatch',
     'error',
     'raw_record',
 )
@@ -143,14 +168,19 @@ def _parse_mrv_slice_line(line):
 
     values = {}
     for token in body.lstrip(': ').split():
-        if token.count('=') != 1:
+        if '=' not in token:
             raise ValueError(f'malformed token {token!r}')
         key, value = token.split('=', 1)
         if key in values:
             raise ValueError(f'duplicate field {key}')
         values[key] = value
 
-    required = set(MRV_INTEGER_FIELDS + MRV_BOOLEAN_FIELDS + MRV_FLOAT_FIELDS)
+    required = set(
+        MRV_INTEGER_FIELDS
+        + MRV_BOOLEAN_FIELDS
+        + MRV_FLOAT_FIELDS
+        + MRV_STATS_DIGEST_FIELDS
+    )
     missing = sorted(required - set(values))
     if missing:
         raise ValueError(f'missing field(s): {", ".join(missing)}')
@@ -169,6 +199,9 @@ def _parse_mrv_slice_line(line):
         if value not in ('true', 'false'):
             raise ValueError(f'invalid boolean field {key}={values[key]!r}')
         record[key] = value == 'true'
+
+    for key in MRV_STATS_DIGEST_FIELDS:
+        record[key] = values[key]
 
     if any(not isfinite(record[key]) for key in MRV_FLOAT_FIELDS):
         raise ValueError('non-finite displacement value')
@@ -326,14 +359,27 @@ def _parse_mrv_registered_line(line):
 
     values = {}
     for token in body.lstrip(': ').split():
-        if token.count('=') != 1:
+        if '=' not in token:
             raise ValueError(f'malformed token {token!r}')
         key, value = token.split('=', 1)
         if key in values:
             raise ValueError(f'duplicate field {key}')
         values[key] = value
 
-    expected = {'slice_id', 'slice_size', 'seal_horizon'}
+    integer_fields = {
+        'slice_id',
+        'leader_round',
+        'slice_size',
+        'seal_horizon',
+        'cumulative_member_count',
+    }
+    digest_fields = {
+        'leader_digest',
+        'member_set_digest',
+        'member_order_digest',
+        'export_prefix_digest',
+    }
+    expected = integer_fields | digest_fields
     missing = sorted(expected - set(values))
     unexpected = sorted(set(values) - expected)
     if missing:
@@ -342,13 +388,15 @@ def _parse_mrv_registered_line(line):
         raise ValueError(f'unexpected field(s): {", ".join(unexpected)}')
 
     try:
-        record = {key: int(values[key]) for key in expected}
+        record = {key: int(values[key]) for key in integer_fields}
     except ValueError as e:
         raise ValueError(f'invalid numeric field: {e}') from e
-    if record['slice_id'] < 0 or record['seal_horizon'] < 0:
-        raise ValueError('negative slice id or seal horizon')
+    if any(record[key] < 0 for key in integer_fields):
+        raise ValueError('negative registration field')
     if record['slice_size'] < 1:
         raise ValueError('registered slice must be nonempty')
+    for key in digest_fields:
+        record[key] = values[key]
     record['raw_record'] = line.strip()
     return record
 
@@ -361,7 +409,7 @@ def _parse_mrv_release_line(line):
 
     values = {}
     for token in body.lstrip(': ').split():
-        if token.count('=') != 1:
+        if '=' not in token:
             raise ValueError(f'malformed token {token!r}')
         key, value = token.split('=', 1)
         if key in values:
@@ -384,6 +432,58 @@ def _parse_mrv_release_line(line):
     if slice_id < 0 or release_delay_ms < 0:
         raise ValueError('negative slice id or release delay')
     return slice_id, release_delay_ms
+
+
+def _parse_mrv_diagnostic_line(line, marker):
+    """Parse one invariant marker emitted immediately before a panic."""
+    _, found, body = line.partition(marker)
+    if not found:
+        raise ValueError(f'missing {marker} marker')
+
+    values = {}
+    for token in body.lstrip(': ').split():
+        if '=' not in token:
+            raise ValueError(f'malformed token {token!r}')
+        key, value = token.split('=', 1)
+        if key in values:
+            raise ValueError(f'duplicate field {key}')
+        values[key] = value
+
+    expected = {'slice_id', 'member_digest'}
+    if marker == MRV_LIFECYCLE_MARKER:
+        expected.add('reason')
+    missing = sorted(expected - set(values))
+    unexpected = sorted(set(values) - expected)
+    if missing:
+        raise ValueError(f'missing field(s): {", ".join(missing)}')
+    if unexpected:
+        raise ValueError(f'unexpected field(s): {", ".join(unexpected)}')
+
+    try:
+        slice_id = int(values['slice_id'])
+    except ValueError as e:
+        raise ValueError(f'invalid slice_id: {e}') from e
+    if slice_id < 0:
+        raise ValueError('negative slice id')
+
+    record = _mrv_status_record(
+        'diagnostic_failure',
+        marker,
+        line.strip(),
+    )
+    record.update(
+        {
+            'slice_id': slice_id,
+            'member_digest': values['member_digest'],
+            'mismatch_class': (
+                'EXACT_ONCE_VIOLATION'
+                if marker == MRV_EXACT_ONCE_MARKER
+                else 'MEMBER_LIFECYCLE_VIOLATION'
+            ),
+            'lifecycle_reason': values.get('reason', ''),
+        }
+    )
+    return record
 
 
 def _reconcile_mrv_registrations(
@@ -419,7 +519,17 @@ def _reconcile_mrv_registrations(
             duplicate.update(
                 {
                     key: matching_registrations[0][key]
-                    for key in ('slice_id', 'slice_size', 'seal_horizon')
+                    for key in (
+                        'slice_id',
+                        'leader_round',
+                        'leader_digest',
+                        'slice_size',
+                        'seal_horizon',
+                        'member_set_digest',
+                        'member_order_digest',
+                        'cumulative_member_count',
+                        'export_prefix_digest',
+                    )
                 }
             )
             slice_records.append(duplicate)
@@ -435,12 +545,28 @@ def _reconcile_mrv_registrations(
             censored.update(
                 {
                     key: registration[key]
-                    for key in ('slice_id', 'slice_size', 'seal_horizon')
+                    for key in (
+                        'slice_id',
+                        'leader_round',
+                        'leader_digest',
+                        'slice_size',
+                        'seal_horizon',
+                        'member_set_digest',
+                        'member_order_digest',
+                        'cumulative_member_count',
+                        'export_prefix_digest',
+                    )
                 }
             )
             slice_records.append(censored)
         elif len(matching_stats) == 1:
             stats = matching_stats[0]
+            stats.update(
+                {
+                    key: registration[key]
+                    for key in MRV_REGISTRATION_FIELDS
+                }
+            )
             if (
                 stats['slice_size'] != registration['slice_size']
                 or stats['seal_horizon'] != registration['seal_horizon']
@@ -552,6 +678,106 @@ def _mark_duplicate_mrv_slices(records):
             _mark_mrv_record_malformed(
                 record, f'duplicate slice_id {record["slice_id"]}'
             )
+
+
+def _classify_mrv_cross_replica(records):
+    """Classify a slice only after all primary logs have been parsed."""
+    group_fields = (
+        'experiment_id',
+        'deployment',
+        'node_count',
+        'input_rate',
+        'faults',
+        'run_index',
+        'mrv_window',
+        'slice_id',
+    )
+    groups = {}
+    for record in records:
+        if record.get('data_status') == 'diagnostic_failure':
+            record['cross_replica_status'] = 'diagnostic_failure'
+            continue
+        if 'slice_id' not in record:
+            record['cross_replica_status'] = 'not_comparable'
+            continue
+        key = tuple(record.get(field) for field in group_fields)
+        groups.setdefault(key, []).append(record)
+
+    identity_fields = (
+        'leader_round',
+        'leader_digest',
+        'member_set_digest',
+        'member_order_digest',
+        'trigger_slice_id',
+        'trigger_export_prefix_digest',
+        'execution_order_digest',
+    )
+    for group in groups.values():
+        faults = group[0].get('faults')
+        node_count = group[0].get('node_count')
+        observed = {record.get('replica_index') for record in group}
+        for record in group:
+            record['observed_replica_count'] = len(observed)
+
+        if (
+            not isinstance(faults, int)
+            or faults != 0
+            or not isinstance(node_count, int)
+        ):
+            for record in group:
+                record['cross_replica_status'] = 'not_comparable_faults'
+                record['expected_replica_count'] = ''
+            continue
+
+        expected = set(range(node_count))
+        for record in group:
+            record['expected_replica_count'] = len(expected)
+        if observed != expected or any(
+            record.get('data_status') != 'valid' for record in group
+        ):
+            for record in group:
+                record['cross_replica_status'] = 'incomplete'
+            continue
+        if any(
+            any(field not in record for field in identity_fields)
+            for record in group
+        ):
+            for record in group:
+                record['cross_replica_status'] = 'identity_unavailable'
+            continue
+
+        classes = []
+        leaders = {
+            (record['leader_round'], record['leader_digest']) for record in group
+        }
+        if len(leaders) > 1:
+            classes.append('LEADER_MAPPING_MISMATCH')
+        elif len({record['member_set_digest'] for record in group}) > 1:
+            classes.append('MEMBER_SET_MISMATCH')
+        else:
+            if len({record['member_order_digest'] for record in group}) > 1:
+                classes.append('BASE_ORDER_MISMATCH')
+            seal_prefixes = {
+                (
+                    record['trigger_slice_id'],
+                    record['trigger_export_prefix_digest'],
+                )
+                for record in group
+            }
+            if len(seal_prefixes) > 1:
+                classes.append('SEAL_PREFIX_MISMATCH')
+            if len({record['execution_order_digest'] for record in group}) > 1:
+                classes.append('EXECUTION_ORDER_MISMATCH')
+
+        frontier_mismatch = len(
+            {record['snapshot_frontier'] for record in group}
+        ) > 1
+        for record in group:
+            record['cross_replica_status'] = (
+                'mismatch' if classes else 'consistent'
+            )
+            record['mismatch_class'] = ','.join(classes)
+            record['snapshot_frontier_mismatch'] = frontier_mismatch
 
 
 class ParseError(Exception):
@@ -681,6 +907,8 @@ class LogParser:
                     record['mrv_window'] = self.mrv_window
                 self.mrv_slice_records.append({**context, **record})
 
+        _classify_mrv_cross_replica(self.mrv_slice_records)
+
         # Parse the workers logs.
         try:
             with Pool() as p:
@@ -729,7 +957,10 @@ class LogParser:
         return size, rate, start, misses, samples
 
     def _parse_primaries(self, log):
-        if search(r'(?:panicked|Error)', log) is not None:
+        has_diagnostic_marker = (
+            MRV_EXACT_ONCE_MARKER in log or MRV_LIFECYCLE_MARKER in log
+        )
+        if search(r'(?:panicked|Error)', log) is not None and not has_diagnostic_marker:
             raise ParseError('Primary(s) panicked')
 
         tmp = findall(r'\[(.*Z) .* Created B\d+\([^ ]+\) -> ([^ ]+=)', log)
@@ -750,7 +981,33 @@ class LogParser:
         stats_seen_ids = set()
         saw_registration_marker = False
         for line in log.splitlines():
-            if MRV_REGISTERED_MARKER in line:
+            if MRV_EXACT_ONCE_MARKER in line:
+                try:
+                    slice_records.append(
+                        _parse_mrv_diagnostic_line(line, MRV_EXACT_ONCE_MARKER)
+                    )
+                except ValueError as e:
+                    slice_records.append(
+                        _mrv_status_record(
+                            'malformed',
+                            f'invalid {MRV_EXACT_ONCE_MARKER}: {e}',
+                            line.strip(),
+                        )
+                    )
+            elif MRV_LIFECYCLE_MARKER in line:
+                try:
+                    slice_records.append(
+                        _parse_mrv_diagnostic_line(line, MRV_LIFECYCLE_MARKER)
+                    )
+                except ValueError as e:
+                    slice_records.append(
+                        _mrv_status_record(
+                            'malformed',
+                            f'invalid {MRV_LIFECYCLE_MARKER}: {e}',
+                            line.strip(),
+                        )
+                    )
+            elif MRV_REGISTERED_MARKER in line:
                 saw_registration_marker = True
                 try:
                     registrations.append(_parse_mrv_registered_line(line))
@@ -939,6 +1196,14 @@ class LogParser:
             x.get('data_status') == 'right_censored'
             for x in self.mrv_slice_records
         )
+        exact_once_failures = sum(
+            x.get('mismatch_class') == 'EXACT_ONCE_VIOLATION'
+            for x in self.mrv_slice_records
+        )
+        lifecycle_failures = sum(
+            x.get('mismatch_class') == 'MEMBER_LIFECYCLE_VIOLATION'
+            for x in self.mrv_slice_records
+        )
 
         return (
             '\n'
@@ -974,7 +1239,9 @@ class LogParser:
             f' MRV slice records: {valid_slices:,} valid, '
             f'{malformed_slices:,} malformed, '
             f'{unavailable_logs:,} unavailable, '
-            f'{right_censored_slices:,} right-censored\n'
+            f'{right_censored_slices:,} right-censored, '
+            f'{exact_once_failures:,} exact-once violation(s), '
+            f'{lifecycle_failures:,} lifecycle violation(s)\n'
             '-----------------------------------------\n'
         )
 
