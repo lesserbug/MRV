@@ -1315,6 +1315,8 @@ fn fingerprint_digests(domain: &[u8], digests: &[Digest]) -> Digest {
 mod tests {
     use super::*;
     use primary::Header;
+    #[cfg(feature = "benchmark")]
+    use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
     use tokio::sync::mpsc::{channel, error::TryRecvError};
 
     fn public_key(value: u8) -> PublicKey {
@@ -1480,6 +1482,196 @@ mod tests {
         );
 
         executor.assert_member_lifecycle();
+    }
+
+    #[cfg(feature = "benchmark")]
+    #[test]
+    fn controlled_visibility_experiment() {
+        const TRIALS: u64 = 100;
+        const TARGET_ROUND: Round = 5;
+        const FIRST_WINDOW_ROUND: Round = TARGET_ROUND + 1;
+
+        for scenario in ["one_sided", "symmetric", "reversing", "byzantine_only"] {
+            let mut expected_edge_count = 0;
+            let mut wrong_edge_count = 0;
+            let mut no_signal_count = 0;
+            let mut conflict_count = 0;
+            let mut strict_final_order_count = 0;
+            let mut opposite_final_order_count = 0;
+            let mut key_opposed_count = 0;
+            let mut base_opposed_count = 0;
+
+            for seed in 0..TRIALS {
+                let mut rng = StdRng::seed_from_u64(seed);
+                let mut creators = [1u8, 2, 3, 4];
+                creators.shuffle(&mut rng);
+                let (mut executor, _) = test_executor(4, 4);
+
+                let a = insert_target(
+                    &mut executor,
+                    certificate(rng.gen(), TARGET_ROUND, creators[0], []),
+                );
+                let b = insert_target(
+                    &mut executor,
+                    certificate(rng.gen(), TARGET_ROUND, creators[1], []),
+                );
+                let decoy = insert_target(
+                    &mut executor,
+                    certificate(rng.gen(), TARGET_ROUND, creators[2], []),
+                );
+
+                let a_is_key_first = executor.tie_break(&a, &b) == Ordering::Less;
+                let favor_a = if seed % 2 == 0 {
+                    a_is_key_first
+                } else {
+                    !a_is_key_first
+                };
+                if scenario == "one_sided" && favor_a != a_is_key_first {
+                    key_opposed_count += 1;
+                }
+                let (favored, other) = if favor_a { (&a, &b) } else { (&b, &a) };
+
+                let mut neutral = Vec::new();
+                for &creator in &creators {
+                    let background = certificate(rng.gen(), TARGET_ROUND - 1, creator, []);
+                    let digest = background.digest();
+                    executor.store.insert(digest.clone(), background);
+                    neutral.push(digest);
+                }
+
+                for round in FIRST_WINDOW_ROUND..=TARGET_ROUND + executor.mrv_window {
+                    for (creator_index, &creator) in creators.iter().enumerate() {
+                        let (see_favored, see_other) = match scenario {
+                            // Correct creators favor one endpoint; the faulty
+                            // creator favors the other. Later rounds make both
+                            // eligible without undoing the first crossing.
+                            "one_sided" if round == FIRST_WINDOW_ROUND => {
+                                (creator_index < 3, creator_index == 3)
+                            }
+                            // This is a synthetic committed-DAG stress case for
+                            // the full-window Conflict rule, not a claim about
+                            // how often reversal occurs in a Narwhal deployment.
+                            "reversing" if round == FIRST_WINDOW_ROUND => {
+                                (creator_index < 3, creator_index == 3)
+                            }
+                            "reversing" if round == FIRST_WINDOW_ROUND + 1 => {
+                                (creator_index == 3, creator_index < 3)
+                            }
+                            // The three correct creators see both endpoints;
+                            // only the one faulty creator contributes net bias.
+                            "byzantine_only" => (true, creator_index < 3),
+                            _ => (true, true),
+                        };
+                        let mut parents = vec![neutral.choose(&mut rng).unwrap().clone()];
+                        if see_favored {
+                            parents.push(favored.clone());
+                        }
+                        if see_other {
+                            parents.push(other.clone());
+                        }
+                        let observer = certificate(rng.gen(), round, creator, parents);
+                        let digest = observer.digest();
+                        let author = observer.origin();
+                        executor.frontier_round = executor.frontier_round.max(round);
+                        executor.store.insert(digest.clone(), observer);
+                        executor.update_seen_for_new_certificate(round, author, &digest);
+                    }
+                }
+
+                let eligible_a = executor.is_eligible(&a);
+                let eligible_b = executor.is_eligible(&b);
+                assert!(
+                    eligible_a && eligible_b,
+                    "controlled scenario must keep both endpoints eligible: scenario={scenario} seed={seed}"
+                );
+                let verdict = executor.compare_incomparable_pair(&a, &b, eligible_a, eligible_b);
+                let expected_verdict = if favor_a {
+                    PairVerdict::EdgeAToB
+                } else {
+                    PairVerdict::EdgeBToA
+                };
+
+                match verdict {
+                    PairVerdict::EdgeAToB | PairVerdict::EdgeBToA => {
+                        if scenario == "one_sided" && verdict == expected_verdict {
+                            expected_edge_count += 1;
+                        } else {
+                            wrong_edge_count += 1;
+                        }
+                    }
+                    PairVerdict::NoSignal => no_signal_count += 1,
+                    PairVerdict::Conflict => conflict_count += 1,
+                    PairVerdict::Ineligible => unreachable!("eligibility was checked above"),
+                }
+
+                let base_opposed = seed % 4 < 2;
+                let members = if base_opposed {
+                    if scenario == "one_sided" {
+                        base_opposed_count += 1;
+                    }
+                    vec![other.clone(), decoy, favored.clone()]
+                } else {
+                    vec![favored.clone(), decoy, other.clone()]
+                };
+                let ordering = executor.order_slice(&members);
+                let favored_component = ordering
+                    .ordered_sccs
+                    .iter()
+                    .position(|component| component.contains(favored))
+                    .unwrap();
+                let other_component = ordering
+                    .ordered_sccs
+                    .iter()
+                    .position(|component| component.contains(other))
+                    .unwrap();
+                let favored_position = ordering.order.iter().position(|x| x == favored).unwrap();
+                let other_position = ordering.order.iter().position(|x| x == other).unwrap();
+
+                if scenario == "one_sided"
+                    && favored_component < other_component
+                    && favored_position < other_position
+                {
+                    strict_final_order_count += 1;
+                }
+                if scenario == "one_sided" && favored_position > other_position {
+                    opposite_final_order_count += 1;
+                }
+            }
+
+            assert_eq!(
+                expected_edge_count + wrong_edge_count + no_signal_count + conflict_count,
+                TRIALS as usize
+            );
+            match scenario {
+                "one_sided" => {
+                    assert_eq!(expected_edge_count, TRIALS as usize);
+                    assert_eq!(strict_final_order_count, TRIALS as usize);
+                    assert_eq!(opposite_final_order_count, 0);
+                    assert_eq!(key_opposed_count, (TRIALS / 2) as usize);
+                    assert_eq!(base_opposed_count, (TRIALS / 2) as usize);
+                }
+                "symmetric" | "byzantine_only" => {
+                    assert_eq!(no_signal_count, TRIALS as usize);
+                }
+                "reversing" => assert_eq!(conflict_count, TRIALS as usize),
+                _ => unreachable!(),
+            }
+            assert_eq!(wrong_edge_count, 0);
+
+            println!(
+                "MRV_ControlledVisibilityStats scenario={} trials={} expected_edge_count={} wrong_edge_count={} no_signal_count={} conflict_count={} strict_final_order_count={} opposite_final_order_count={} key_opposed_count={} base_opposed_count={}",
+                scenario,
+                TRIALS,
+                expected_edge_count,
+                wrong_edge_count,
+                no_signal_count,
+                conflict_count,
+                strict_final_order_count,
+                opposite_final_order_count,
+                key_opposed_count,
+                base_opposed_count,
+            );
+        }
     }
 
     #[tokio::test]
