@@ -1314,9 +1314,15 @@ fn fingerprint_digests(domain: &[u8], digests: &[Digest]) -> Digest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "benchmark")]
+    use config::{Authority, Committee, PrimaryAddresses};
+    #[cfg(feature = "benchmark")]
+    use consensus::Consensus;
     use primary::Header;
     #[cfg(feature = "benchmark")]
     use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
+    #[cfg(feature = "benchmark")]
+    use std::collections::BTreeSet;
     use tokio::sync::mpsc::{channel, error::TryRecvError};
 
     fn public_key(value: u8) -> PublicKey {
@@ -1672,6 +1678,224 @@ mod tests {
                 base_opposed_count,
             );
         }
+    }
+
+    #[cfg(feature = "benchmark")]
+    #[tokio::test]
+    async fn controlled_tusk_vs_mrv_experiment() {
+        const TRIALS: u64 = 100;
+        const LAST_ROUND: Round = 13;
+
+        let mut tusk_favored_first_count = 0;
+        let mut mrv_favored_first_count = 0;
+        let mut tusk_opposed_count = 0;
+        let mut mrv_override_count = 0;
+        let mut key_opposed_count = 0;
+
+        for seed in 0..TRIALS {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let creator_ids = [1u8, 2, 3, 4];
+            let mut roles = creator_ids;
+            roles.shuffle(&mut rng);
+            let target_a_creator = roles[0];
+            let target_b_creator = roles[1];
+            let neutral_creators = [roles[2], roles[3]];
+
+            let a_is_key_first = target_a_creator < target_b_creator;
+            let favor_a = if seed % 2 == 0 {
+                a_is_key_first
+            } else {
+                !a_is_key_first
+            };
+            if favor_a != a_is_key_first {
+                key_opposed_count += 1;
+            }
+
+            let committee = Committee {
+                authorities: creator_ids
+                    .iter()
+                    .map(|creator| {
+                        (
+                            public_key(*creator),
+                            Authority {
+                                stake: 1,
+                                primary: PrimaryAddresses {
+                                    primary_to_primary: "0.0.0.0:0".parse().unwrap(),
+                                    worker_to_primary: "0.0.0.0:0".parse().unwrap(),
+                                },
+                                workers: HashMap::new(),
+                            },
+                        )
+                    })
+                    .collect(),
+            };
+
+            let mut previous_round: BTreeSet<Digest> = Certificate::genesis(&committee)
+                .iter()
+                .map(Certificate::digest)
+                .collect();
+            let mut certificates = Vec::new();
+            let mut target_a: Option<Digest> = None;
+            let mut target_b: Option<Digest> = None;
+            let mut neutral_targets = Vec::new();
+            let mut round_four_nonleader = Vec::new();
+
+            // With the production round-robin rule, creator 1 is the round-4
+            // leader. Round 5 deliberately excludes that certificate so A and
+            // B are first exported together by the later committed leader.
+            let round_four_leader = creator_ids[0];
+            let round_four_both_observer = creator_ids[1];
+
+            for round in 1..=LAST_ROUND {
+                let mut current_round = Vec::new();
+                for creator in creator_ids {
+                    let parents = if round == 4 {
+                        let favored = if favor_a {
+                            target_a.as_ref().unwrap()
+                        } else {
+                            target_b.as_ref().unwrap()
+                        };
+                        let other = if favor_a {
+                            target_b.as_ref().unwrap()
+                        } else {
+                            target_a.as_ref().unwrap()
+                        };
+                        let mut parents: BTreeSet<Digest> =
+                            neutral_targets.iter().cloned().collect();
+                        if creator == round_four_leader {
+                            parents.insert(other.clone());
+                        } else {
+                            parents.insert(favored.clone());
+                            if creator == round_four_both_observer {
+                                parents.insert(other.clone());
+                            }
+                        }
+                        parents
+                    } else if round == 5 {
+                        round_four_nonleader.iter().cloned().collect()
+                    } else {
+                        previous_round.clone()
+                    };
+
+                    let certificate = certificate(rng.gen(), round, creator, parents);
+                    let digest = certificate.digest();
+                    if round == 3 {
+                        if creator == target_a_creator {
+                            target_a = Some(digest.clone());
+                        } else if creator == target_b_creator {
+                            target_b = Some(digest.clone());
+                        } else if neutral_creators.contains(&creator) {
+                            neutral_targets.push(digest.clone());
+                        }
+                    }
+                    if round == 4 && creator != round_four_leader {
+                        round_four_nonleader.push(digest.clone());
+                    }
+                    current_round.push(certificate);
+                }
+                previous_round = current_round.iter().map(Certificate::digest).collect();
+                certificates.extend(current_round);
+            }
+
+            let target_a = target_a.expect("controlled DAG must contain target A");
+            let target_b = target_b.expect("controlled DAG must contain target B");
+            let favored = if favor_a { &target_a } else { &target_b };
+            let other = if favor_a { &target_b } else { &target_a };
+
+            let (tx_consensus, rx_consensus) = channel(128);
+            let (tx_primary, _rx_primary) = channel(128);
+            let (tx_tusk_output, mut rx_tusk_output) = channel(16);
+            Consensus::spawn(
+                committee,
+                /* gc_depth */ 50,
+                rx_consensus,
+                tx_primary,
+                tx_tusk_output,
+            );
+            for certificate in certificates {
+                tx_consensus.send(certificate).await.unwrap();
+            }
+            drop(tx_consensus);
+
+            let mut tusk_slices = Vec::new();
+            while let Some(slice) = rx_tusk_output.recv().await {
+                tusk_slices.push(slice);
+            }
+
+            let target_slice = tusk_slices
+                .iter()
+                .filter(|slice| {
+                    let members: HashSet<Digest> =
+                        slice.certificates.iter().map(Certificate::digest).collect();
+                    members.contains(&target_a) && members.contains(&target_b)
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                target_slice.len(),
+                1,
+                "targets must occur together in exactly one Tusk slice: seed={seed}"
+            );
+            let target_slice = target_slice[0];
+            let tusk_favored_position = target_slice
+                .certificates
+                .iter()
+                .position(|certificate| certificate.digest() == *favored)
+                .unwrap();
+            let tusk_other_position = target_slice
+                .certificates
+                .iter()
+                .position(|certificate| certificate.digest() == *other)
+                .unwrap();
+            let tusk_favored_first = tusk_favored_position < tusk_other_position;
+            if tusk_favored_first {
+                tusk_favored_first_count += 1;
+            } else {
+                tusk_opposed_count += 1;
+            }
+
+            let (tx_mrv_input, rx_mrv_input) = channel(16);
+            let (tx_mrv_output, mut rx_mrv_output) = channel(128);
+            MrvExecutor::spawn(rx_mrv_input, tx_mrv_output, 4, 4);
+            for slice in tusk_slices {
+                tx_mrv_input.send(slice).await.unwrap();
+            }
+            drop(tx_mrv_input);
+
+            let mut mrv_order = Vec::new();
+            while let Some(certificate) = rx_mrv_output.recv().await {
+                mrv_order.push(certificate.digest());
+            }
+            let mrv_favored_position = mrv_order
+                .iter()
+                .position(|digest| digest == favored)
+                .expect("MRV must release the favored target");
+            let mrv_other_position = mrv_order
+                .iter()
+                .position(|digest| digest == other)
+                .expect("MRV must release the other target");
+            let mrv_favored_first = mrv_favored_position < mrv_other_position;
+            if mrv_favored_first {
+                mrv_favored_first_count += 1;
+            }
+            if !tusk_favored_first && mrv_favored_first {
+                mrv_override_count += 1;
+            }
+        }
+
+        assert_eq!(key_opposed_count, (TRIALS / 2) as usize);
+        assert_eq!(mrv_favored_first_count, TRIALS as usize);
+        assert_eq!(mrv_override_count, tusk_opposed_count);
+
+        println!(
+            "MRV_TuskComparisonStats scenario=one_sided trials={} tusk_favored_first_count={} tusk_opposed_count={} mrv_favored_first_count={} mrv_opposite_count={} mrv_override_count={} key_opposed_count={}",
+            TRIALS,
+            tusk_favored_first_count,
+            tusk_opposed_count,
+            mrv_favored_first_count,
+            TRIALS as usize - mrv_favored_first_count,
+            mrv_override_count,
+            key_opposed_count,
+        );
     }
 
     #[tokio::test]

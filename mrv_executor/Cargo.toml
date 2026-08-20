@@ -19,3 +19,4 @@ ed25519-dalek = { version = "1.0.1", optional = true }
 
 [dev-dependencies]
 rand = "0.7"
+config = { path = "../config" }
