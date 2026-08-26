@@ -1427,6 +1427,675 @@ mod tests {
     }
 
     #[cfg(feature = "benchmark")]
+    const CONTROLLED_ADVERSARIAL_LAST_ROUND: Round = 13;
+    #[cfg(feature = "benchmark")]
+    const CONTROLLED_SCHEDULER_ORDER: [u8; 3] = [2, 3, 1];
+
+    #[cfg(feature = "benchmark")]
+    fn controlled_authenticated_certificate(
+        payload_tag: u8,
+        round: Round,
+        author: u8,
+        parents: BTreeSet<Digest>,
+    ) -> Certificate {
+        let mut header = Header {
+            author: public_key(author),
+            round,
+            payload: [(raw_digest(payload_tag), 0)].iter().cloned().collect(),
+            parents,
+            ..Header::default()
+        };
+        header.id = header.digest();
+        Certificate {
+            header,
+            ..Certificate::default()
+        }
+    }
+
+    #[cfg(feature = "benchmark")]
+    #[derive(Clone)]
+    struct ControlledAdversarialDagSpec {
+        target_roles: [u8; 4],
+        payload_tags: [[u8; 4]; CONTROLLED_ADVERSARIAL_LAST_ROUND as usize],
+    }
+
+    #[cfg(feature = "benchmark")]
+    impl ControlledAdversarialDagSpec {
+        fn new(seed: u64) -> Self {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let mut target_roles = [1u8, 2, 3, 4];
+            target_roles.shuffle(&mut rng);
+
+            let mut payload_tags = [[0u8; 4]; CONTROLLED_ADVERSARIAL_LAST_ROUND as usize];
+            for round_tags in &mut payload_tags {
+                for tag in round_tags {
+                    *tag = rng.gen();
+                }
+            }
+
+            Self {
+                target_roles,
+                payload_tags,
+            }
+        }
+
+        fn build(
+            &self,
+            directly_affected_correct_proposers: Option<usize>,
+        ) -> (Committee, Vec<Certificate>, Digest, Digest) {
+            let creator_ids = [1u8, 2, 3, 4];
+            // Affect the two correct non-leaders first so each of h=1 and h=2
+            // changes parent availability inside the selected committed
+            // snapshot; the excluded round-4 leader is the third proposer.
+            let round_four_leader = creator_ids[0];
+            let bridge_creator = creator_ids[2];
+            let byzantine_creator = creator_ids[3];
+            let target_a_creator = self.target_roles[0];
+            let target_b_creator = self.target_roles[1];
+
+            if let Some(affected) = directly_affected_correct_proposers {
+                assert!(affected <= CONTROLLED_SCHEDULER_ORDER.len());
+            }
+
+            // The reference direction A -> B and both target roles are fixed
+            // before any certificate parent set is constructed.
+            let committee = Committee {
+                authorities: creator_ids
+                    .iter()
+                    .map(|creator| {
+                        (
+                            public_key(*creator),
+                            Authority {
+                                stake: 1,
+                                primary: PrimaryAddresses {
+                                    primary_to_primary: "0.0.0.0:0".parse().unwrap(),
+                                    worker_to_primary: "0.0.0.0:0".parse().unwrap(),
+                                },
+                                workers: HashMap::new(),
+                            },
+                        )
+                    })
+                    .collect(),
+            };
+
+            let mut previous_round: BTreeSet<Digest> = Certificate::genesis(&committee)
+                .iter()
+                .map(Certificate::digest)
+                .collect();
+            let mut certificates = Vec::new();
+            let mut target_a: Option<Digest> = None;
+            let mut target_b: Option<Digest> = None;
+            let mut neutral_targets = Vec::new();
+            let mut round_four_nonleader = Vec::new();
+
+            for round in 1..=CONTROLLED_ADVERSARIAL_LAST_ROUND {
+                let mut current_round = Vec::new();
+                for (creator_index, creator) in creator_ids.iter().copied().enumerate() {
+                    let parents = if round == 4 {
+                        let target_a = target_a.as_ref().unwrap();
+                        let target_b = target_b.as_ref().unwrap();
+                        let a_only: BTreeSet<Digest> = std::iter::once(target_a.clone())
+                            .chain(neutral_targets.iter().cloned())
+                            .collect();
+                        let b_only: BTreeSet<Digest> = std::iter::once(target_b.clone())
+                            .chain(neutral_targets.iter().cloned())
+                            .collect();
+                        let both: BTreeSet<Digest> = [
+                            target_a.clone(),
+                            target_b.clone(),
+                            neutral_targets[0].clone(),
+                        ]
+                        .iter()
+                        .cloned()
+                        .collect();
+
+                        match directly_affected_correct_proposers {
+                            None => {
+                                // Reference: the Byzantine creator is neutral
+                                // to the attack and correct availability has a
+                                // one-sided A-supporting margin.
+                                if creator == bridge_creator {
+                                    both
+                                } else {
+                                    a_only
+                                }
+                            }
+                            Some(affected) => {
+                                let scheduler_affected = CONTROLLED_SCHEDULER_ORDER[..affected]
+                                    .iter()
+                                    .any(|candidate| *candidate == creator);
+                                if scheduler_affected {
+                                    b_only
+                                } else if creator == bridge_creator || creator == byzantine_creator
+                                {
+                                    // Relative to its reference A-only choice,
+                                    // the Byzantine creator adds B availability
+                                    // while retaining the carrier needed for
+                                    // exact-once common-slice membership at h=3.
+                                    both
+                                } else {
+                                    a_only
+                                }
+                            }
+                        }
+                    } else if round == 5 {
+                        // Excluding the round-4 leader keeps A and B out of an
+                        // earlier Tusk commit, while the correct bridge keeps
+                        // both targets in the later common execution slice.
+                        round_four_nonleader.iter().cloned().collect()
+                    } else {
+                        previous_round.clone()
+                    };
+
+                    let payload_tag = self.payload_tags[(round - 1) as usize][creator_index];
+                    let certificate =
+                        controlled_authenticated_certificate(payload_tag, round, creator, parents);
+                    let digest = certificate.digest();
+                    if round == 3 {
+                        if creator == target_a_creator {
+                            target_a = Some(digest.clone());
+                        } else if creator == target_b_creator {
+                            target_b = Some(digest.clone());
+                        } else {
+                            neutral_targets.push(digest.clone());
+                        }
+                    }
+                    if round == 4 && creator != round_four_leader {
+                        round_four_nonleader.push(digest.clone());
+                    }
+                    current_round.push(certificate);
+                }
+                previous_round = current_round.iter().map(Certificate::digest).collect();
+                certificates.extend(current_round);
+            }
+
+            (
+                committee,
+                certificates,
+                target_a.expect("controlled DAG must contain target A"),
+                target_b.expect("controlled DAG must contain target B"),
+            )
+        }
+    }
+
+    #[cfg(feature = "benchmark")]
+    fn assert_valid_quorum_parent_dag(committee: &Committee, certificates: &[Certificate]) {
+        let mut known: HashMap<Digest, (Round, PublicKey)> = Certificate::genesis(committee)
+            .into_iter()
+            .map(|certificate| {
+                (
+                    certificate.digest(),
+                    (certificate.round(), certificate.origin()),
+                )
+            })
+            .collect();
+        let mut creator_rounds = HashSet::new();
+
+        for certificate in certificates {
+            assert_eq!(
+                certificate.header.digest(),
+                certificate.header.id,
+                "controlled header id must authenticate creator, round, payload, and parents"
+            );
+            assert!(
+                creator_rounds.insert((certificate.round(), certificate.origin())),
+                "controlled DAG must have one certificate per creator and round"
+            );
+
+            let mut parent_creators = HashSet::new();
+            let mut parent_stake = 0;
+            for parent in &certificate.header.parents {
+                let (parent_round, parent_creator) = known
+                    .get(parent)
+                    .expect("controlled parent must name an existing certificate");
+                assert_eq!(
+                    parent_round.saturating_add(1),
+                    certificate.round(),
+                    "every controlled parent must come from the previous round"
+                );
+                assert!(
+                    parent_creators.insert(*parent_creator),
+                    "controlled parents must have distinct creators"
+                );
+                parent_stake += committee.stake(parent_creator);
+            }
+            assert!(
+                parent_stake >= committee.quorum_threshold(),
+                "controlled parent set must reach the Narwhal quorum threshold"
+            );
+            known.insert(
+                certificate.digest(),
+                (certificate.round(), certificate.origin()),
+            );
+        }
+    }
+
+    #[cfg(feature = "benchmark")]
+    async fn run_tusk_and_mrv(
+        committee: Committee,
+        certificates: Vec<Certificate>,
+    ) -> (Vec<CommittedSubDag>, Vec<Digest>) {
+        let committee_size = committee.size();
+        let (tx_consensus, rx_consensus) = channel(128);
+        let (tx_primary, _rx_primary) = channel(128);
+        let (tx_tusk_output, mut rx_tusk_output) = channel(16);
+        Consensus::spawn(
+            committee,
+            /* gc_depth */ 50,
+            rx_consensus,
+            tx_primary,
+            tx_tusk_output,
+        );
+        for certificate in certificates {
+            tx_consensus.send(certificate).await.unwrap();
+        }
+        drop(tx_consensus);
+
+        let mut tusk_slices = Vec::new();
+        while let Some(slice) = rx_tusk_output.recv().await {
+            tusk_slices.push(slice);
+        }
+
+        // The unmodified Tusk output objects are the direct production inputs
+        // to MRV; the clone below only preserves them for test inspection.
+        let (tx_mrv_input, rx_mrv_input) = channel(16);
+        let (tx_mrv_output, mut rx_mrv_output) = channel(128);
+        MrvExecutor::spawn(rx_mrv_input, tx_mrv_output, committee_size, 4);
+        for slice in tusk_slices.iter().cloned() {
+            tx_mrv_input.send(slice).await.unwrap();
+        }
+        drop(tx_mrv_input);
+
+        let mut mrv_order = Vec::new();
+        while let Some(certificate) = rx_mrv_output.recv().await {
+            mrv_order.push(certificate.digest());
+        }
+
+        (tusk_slices, mrv_order)
+    }
+
+    #[cfg(feature = "benchmark")]
+    fn target_b_before_a_in_tusk(
+        tusk_slices: &[CommittedSubDag],
+        target_a: &Digest,
+        target_b: &Digest,
+    ) -> bool {
+        assert_eq!(
+            tusk_slices
+                .iter()
+                .flat_map(|slice| &slice.certificates)
+                .filter(|certificate| certificate.digest() == *target_a)
+                .count(),
+            1,
+            "target A must occur exactly once in Tusk output"
+        );
+        assert_eq!(
+            tusk_slices
+                .iter()
+                .flat_map(|slice| &slice.certificates)
+                .filter(|certificate| certificate.digest() == *target_b)
+                .count(),
+            1,
+            "target B must occur exactly once in Tusk output"
+        );
+        let target_slices: Vec<&CommittedSubDag> = tusk_slices
+            .iter()
+            .filter(|slice| {
+                let members: HashSet<Digest> =
+                    slice.certificates.iter().map(Certificate::digest).collect();
+                members.contains(target_a) && members.contains(target_b)
+            })
+            .collect();
+        assert_eq!(
+            target_slices.len(),
+            1,
+            "targets must occur together in exactly one Tusk execution slice"
+        );
+        let target_slice = target_slices[0];
+        let a_position = target_slice
+            .certificates
+            .iter()
+            .position(|certificate| certificate.digest() == *target_a)
+            .unwrap();
+        let b_position = target_slice
+            .certificates
+            .iter()
+            .position(|certificate| certificate.digest() == *target_b)
+            .unwrap();
+        b_position < a_position
+    }
+
+    #[cfg(feature = "benchmark")]
+    fn target_b_before_a_in_mrv(
+        mrv_order: &[Digest],
+        target_a: &Digest,
+        target_b: &Digest,
+    ) -> bool {
+        let a_positions: Vec<usize> = mrv_order
+            .iter()
+            .enumerate()
+            .filter_map(|(position, digest)| (digest == target_a).then_some(position))
+            .collect();
+        let b_positions: Vec<usize> = mrv_order
+            .iter()
+            .enumerate()
+            .filter_map(|(position, digest)| (digest == target_b).then_some(position))
+            .collect();
+        assert_eq!(
+            a_positions.len(),
+            1,
+            "MRV must release target A exactly once"
+        );
+        assert_eq!(
+            b_positions.len(),
+            1,
+            "MRV must release target B exactly once"
+        );
+        b_positions[0] < a_positions[0]
+    }
+
+    #[cfg(feature = "benchmark")]
+    fn controlled_snapshot_slice_index(
+        tusk_slices: &[CommittedSubDag],
+        target_a: &Digest,
+        target_b: &Digest,
+    ) -> usize {
+        let target_slice_indices: Vec<usize> = tusk_slices
+            .iter()
+            .enumerate()
+            .filter_map(|(index, slice)| {
+                let members: HashSet<Digest> =
+                    slice.certificates.iter().map(Certificate::digest).collect();
+                (members.contains(target_a) && members.contains(target_b)).then_some(index)
+            })
+            .collect();
+        assert_eq!(target_slice_indices.len(), 1);
+        let target_slice_index = target_slice_indices[0];
+        let target_slice_max_round = tusk_slices[target_slice_index]
+            .certificates
+            .iter()
+            .map(Certificate::round)
+            .max()
+            .unwrap();
+        let seal_horizon = target_slice_max_round.saturating_add(4);
+
+        let mut frontier_round = 0;
+        tusk_slices
+            .iter()
+            .enumerate()
+            .find_map(|(index, slice)| {
+                frontier_round = frontier_round.max(
+                    slice
+                        .certificates
+                        .iter()
+                        .map(Certificate::round)
+                        .max()
+                        .unwrap_or(0),
+                );
+                (index >= target_slice_index && frontier_round >= seal_horizon).then_some(index)
+            })
+            .expect("controlled Tusk execution must expose the fixed MRV snapshot horizon")
+    }
+
+    #[cfg(feature = "benchmark")]
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum TargetComponentRelation {
+        SameScc,
+        AReachesB,
+        BReachesA,
+        IncomparableComponents,
+    }
+
+    #[cfg(feature = "benchmark")]
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    struct ControlledCrossingDecomposition {
+        crossing_round: Round,
+        total_delta: i64,
+        correct_delta: i64,
+        byzantine_delta: i64,
+        a_only_creator_count: usize,
+        b_only_creator_count: usize,
+        both_creator_count: usize,
+        neither_creator_count: usize,
+    }
+
+    #[cfg(feature = "benchmark")]
+    struct ControlledPairMeasurement {
+        verdict: PairVerdict,
+        component_relation: TargetComponentRelation,
+        b_to_a_crossing: Option<ControlledCrossingDecomposition>,
+    }
+
+    #[cfg(feature = "benchmark")]
+    fn controlled_b_to_a_crossing(
+        executor: &MrvExecutor,
+        target_a: &Digest,
+        target_b: &Digest,
+    ) -> Option<ControlledCrossingDecomposition> {
+        let state_a = executor
+            .auf_states
+            .get(target_a)
+            .expect("controlled target A must have visibility state");
+        let state_b = executor
+            .auf_states
+            .get(target_b)
+            .expect("controlled target B must have visibility state");
+        let first_round = state_a.round.max(state_b.round).saturating_add(1);
+        let last_round = state_a
+            .round
+            .max(state_b.round)
+            .saturating_add(executor.mrv_window);
+        let byzantine_creator = public_key(4);
+
+        for round in first_round..=last_round {
+            let seen_a = state_a.seen_by_round.get(&round);
+            let seen_b = state_b.seen_by_round.get(&round);
+            let mut correct_delta = 0i64;
+            let mut byzantine_delta = 0i64;
+            let mut a_only_creator_count = 0;
+            let mut b_only_creator_count = 0;
+            let mut both_creator_count = 0;
+            let mut neither_creator_count = 0;
+
+            for creator in [1u8, 2, 3, 4].iter().map(|creator| public_key(*creator)) {
+                let sees_a = seen_a.map_or(false, |creators| creators.contains(&creator));
+                let sees_b = seen_b.map_or(false, |creators| creators.contains(&creator));
+                let contribution = match (sees_a, sees_b) {
+                    (true, false) => {
+                        a_only_creator_count += 1;
+                        -1
+                    }
+                    (false, true) => {
+                        b_only_creator_count += 1;
+                        1
+                    }
+                    (true, true) => {
+                        both_creator_count += 1;
+                        0
+                    }
+                    (false, false) => {
+                        neither_creator_count += 1;
+                        0
+                    }
+                };
+                if creator == byzantine_creator {
+                    byzantine_delta += contribution;
+                } else {
+                    correct_delta += contribution;
+                }
+            }
+
+            let total_delta = executor.seen_count_at(target_b, round) as i64
+                - executor.seen_count_at(target_a, round) as i64;
+            assert_eq!(
+                total_delta,
+                correct_delta + byzantine_delta,
+                "controlled B -> A margin must decompose by creator role"
+            );
+            assert_eq!(
+                a_only_creator_count
+                    + b_only_creator_count
+                    + both_creator_count
+                    + neither_creator_count,
+                4,
+                "controlled crossing classification must cover every creator"
+            );
+
+            if total_delta >= executor.delta_threshold {
+                return Some(ControlledCrossingDecomposition {
+                    crossing_round: round,
+                    total_delta,
+                    correct_delta,
+                    byzantine_delta,
+                    a_only_creator_count,
+                    b_only_creator_count,
+                    both_creator_count,
+                    neither_creator_count,
+                });
+            }
+        }
+
+        None
+    }
+
+    #[cfg(feature = "benchmark")]
+    fn controlled_pair_measurement(
+        tusk_slices: &[CommittedSubDag],
+        target_a: &Digest,
+        target_b: &Digest,
+    ) -> ControlledPairMeasurement {
+        let snapshot_slice_index = controlled_snapshot_slice_index(tusk_slices, target_a, target_b);
+
+        let (mut executor, _) = test_executor(4, 4);
+        for slice in tusk_slices.iter().take(snapshot_slice_index + 1) {
+            let mut certificates = slice.certificates.clone();
+            certificates.sort_by_key(Certificate::round);
+            for certificate in certificates {
+                let digest = certificate.digest();
+                let round = certificate.round();
+                let author = certificate.origin();
+                executor.frontier_round = executor.frontier_round.max(round);
+                executor.store.insert(digest.clone(), certificate);
+                if !executor.auf_states.contains_key(&digest) {
+                    executor.note_active_round(round);
+                    executor
+                        .auf_states
+                        .insert(digest.clone(), AufState::new(round));
+                }
+                executor.update_seen_for_new_certificate(round, author, &digest);
+            }
+        }
+
+        assert_eq!(
+            executor.causal_edge(target_a, target_b),
+            None,
+            "same-round targets must be causally incomparable"
+        );
+        let eligible_a = executor.is_eligible(target_a);
+        let eligible_b = executor.is_eligible(target_b);
+        let verdict =
+            executor.compare_incomparable_pair(target_a, target_b, eligible_a, eligible_b);
+
+        let target_slice = tusk_slices
+            .iter()
+            .find(|slice| {
+                let members: HashSet<Digest> =
+                    slice.certificates.iter().map(Certificate::digest).collect();
+                members.contains(target_a) && members.contains(target_b)
+            })
+            .expect("controlled targets must share one execution slice");
+        let mut nodes: Vec<Digest> = target_slice
+            .certificates
+            .iter()
+            .map(Certificate::digest)
+            .collect();
+        nodes.sort_by(|a, b| executor.tie_break(a, b));
+        let eligible: HashMap<Digest, bool> = nodes
+            .iter()
+            .cloned()
+            .map(|digest| {
+                let is_eligible = executor.is_eligible(&digest);
+                (digest, is_eligible)
+            })
+            .collect();
+        let mut graph: HashMap<Digest, HashSet<Digest>> =
+            nodes.iter().cloned().map(|d| (d, HashSet::new())).collect();
+        let mut causal_edges = HashSet::new();
+
+        // Rebuild the same slice graph as order_slice without modifying any
+        // visibility count, verdict, or production ordering state.
+        for i in 0..nodes.len() {
+            for j in (i + 1)..nodes.len() {
+                let a = &nodes[i];
+                let b = &nodes[j];
+                if let Some((from, to)) = executor.causal_edge(a, b) {
+                    graph.get_mut(&from).unwrap().insert(to.clone());
+                    causal_edges.insert((from, to));
+                    continue;
+                }
+
+                let pair_verdict =
+                    executor.compare_incomparable_pair(a, b, eligible[a], eligible[b]);
+                match pair_verdict {
+                    PairVerdict::EdgeAToB => {
+                        graph.get_mut(a).unwrap().insert(b.clone());
+                    }
+                    PairVerdict::EdgeBToA => {
+                        graph.get_mut(b).unwrap().insert(a.clone());
+                    }
+                    PairVerdict::Ineligible | PairVerdict::Conflict | PairVerdict::NoSignal => {}
+                }
+            }
+        }
+
+        let linearization = executor.linearize_graph(&nodes, &graph, &causal_edges);
+        let component_reachability = MrvExecutor::component_reachability(
+            linearization.ordered_sccs.len(),
+            &linearization.component_graph,
+        );
+        let component_a = linearization.node_to_component[target_a];
+        let component_b = linearization.node_to_component[target_b];
+        let component_relation = if component_a == component_b {
+            TargetComponentRelation::SameScc
+        } else if component_reachability[component_a].contains(&component_b) {
+            TargetComponentRelation::AReachesB
+        } else if component_reachability[component_b].contains(&component_a) {
+            TargetComponentRelation::BReachesA
+        } else {
+            TargetComponentRelation::IncomparableComponents
+        };
+
+        ControlledPairMeasurement {
+            verdict,
+            component_relation,
+            b_to_a_crossing: controlled_b_to_a_crossing(&executor, target_a, target_b),
+        }
+    }
+
+    #[cfg(feature = "benchmark")]
+    #[derive(Default)]
+    struct AdversarialStructureStats {
+        snapshot_visible_directly_affected_correct_proposers: Option<usize>,
+        snapshot_visible_correct_round_four_proposer_count: Option<usize>,
+        edge_preserved_count: usize,
+        edge_suppressed_no_signal_count: usize,
+        edge_suppressed_conflict_count: usize,
+        edge_reversed_count: usize,
+        ineligible_count: usize,
+        crossing_count: usize,
+        crossing_decomposition: Option<ControlledCrossingDecomposition>,
+        tusk_reference_attack_order_count: usize,
+        tusk_attack_order_count: usize,
+        tusk_attack_induced_reversal_count: usize,
+        tusk_attack_removed_reversal_count: usize,
+        mrv_attack_order_count: usize,
+        mrv_attack_order_without_reverse_edge_count: usize,
+        mrv_attack_order_without_reverse_edge_indirect_path_count: usize,
+        mrv_attack_order_without_reverse_edge_same_scc_count: usize,
+        mrv_attack_order_without_reverse_edge_incomparable_components_count: usize,
+    }
+
+    #[cfg(feature = "benchmark")]
     #[test]
     fn diagnostic_fingerprints_separate_member_set_and_orders() {
         let a = raw_digest(1);
@@ -1896,6 +2565,352 @@ mod tests {
             mrv_override_count,
             key_opposed_count,
         );
+    }
+
+    #[cfg(feature = "benchmark")]
+    #[tokio::test]
+    async fn controlled_adversarial_structure_experiment() {
+        const TRIALS: u64 = 100;
+
+        let mut reference_edge_count = 0;
+        let mut stats: Vec<AdversarialStructureStats> = (0..=3)
+            .map(|_| AdversarialStructureStats::default())
+            .collect();
+
+        for seed in 0..TRIALS {
+            let spec = ControlledAdversarialDagSpec::new(seed);
+            let (reference_committee, reference_certificates, reference_a, reference_b) =
+                spec.build(None);
+            assert_valid_quorum_parent_dag(&reference_committee, &reference_certificates);
+
+            let reference_a_certificate = reference_certificates
+                .iter()
+                .find(|certificate| certificate.digest() == reference_a)
+                .unwrap();
+            let reference_b_certificate = reference_certificates
+                .iter()
+                .find(|certificate| certificate.digest() == reference_b)
+                .unwrap();
+            assert_eq!(reference_a_certificate.round(), 3);
+            assert_eq!(
+                reference_a_certificate.round(),
+                reference_b_certificate.round()
+            );
+
+            let (reference_slices, reference_mrv_order) =
+                run_tusk_and_mrv(reference_committee, reference_certificates.clone()).await;
+            let reference_tusk_attack_order =
+                target_b_before_a_in_tusk(&reference_slices, &reference_a, &reference_b);
+            let reference_mrv_attack_order =
+                target_b_before_a_in_mrv(&reference_mrv_order, &reference_a, &reference_b);
+            assert!(
+                !reference_mrv_attack_order,
+                "reference MRV order must realize the predeclared A -> B direction: seed={seed}"
+            );
+
+            let reference_measurement =
+                controlled_pair_measurement(&reference_slices, &reference_a, &reference_b);
+            assert_eq!(
+                reference_measurement.verdict,
+                PairVerdict::EdgeAToB,
+                "reference must produce the predeclared A -> B edge: seed={seed}"
+            );
+            reference_edge_count += 1;
+
+            for directly_affected_correct_proposers in 0..=3 {
+                let (attack_committee, attack_certificates, target_a, target_b) =
+                    spec.build(Some(directly_affected_correct_proposers));
+                assert_valid_quorum_parent_dag(&attack_committee, &attack_certificates);
+                assert_eq!(target_a, reference_a);
+                assert_eq!(target_b, reference_b);
+                assert_eq!(attack_certificates.len(), reference_certificates.len());
+
+                let mut reference_known: HashMap<Digest, PublicKey> =
+                    Certificate::genesis(&attack_committee)
+                        .into_iter()
+                        .map(|certificate| (certificate.digest(), certificate.origin()))
+                        .collect();
+                let mut attack_known = reference_known.clone();
+                let mut changed_round_four_proposers = HashSet::new();
+                for (reference, attacked) in reference_certificates.iter().zip(&attack_certificates)
+                {
+                    assert_eq!(reference.round(), attacked.round());
+                    assert_eq!(reference.origin(), attacked.origin());
+                    assert_eq!(
+                        reference.header.payload, attacked.header.payload,
+                        "paired conditions must keep per-certificate payloads fixed"
+                    );
+                    let reference_parent_creators: HashSet<PublicKey> = reference
+                        .header
+                        .parents
+                        .iter()
+                        .map(|parent| *reference_known.get(parent).unwrap())
+                        .collect();
+                    let attack_parent_creators: HashSet<PublicKey> = attacked
+                        .header
+                        .parents
+                        .iter()
+                        .map(|parent| *attack_known.get(parent).unwrap())
+                        .collect();
+
+                    if reference.round() < 4 {
+                        assert_eq!(reference.header.parents, attacked.header.parents);
+                        assert_eq!(reference.header.id, attacked.header.id);
+                        assert_eq!(reference.digest(), attacked.digest());
+                    } else if reference.round() != 4 {
+                        assert_eq!(
+                            reference_parent_creators, attack_parent_creators,
+                            "non-attack rounds must preserve the paired parent topology"
+                        );
+                    }
+                    if reference.round() == 4 && reference.header.parents != attacked.header.parents
+                    {
+                        assert_ne!(reference.header.id, attacked.header.id);
+                        assert_ne!(reference.digest(), attacked.digest());
+                        changed_round_four_proposers.insert(reference.origin());
+                    } else if reference.round() >= 5 {
+                        assert_ne!(
+                            reference.header.id, attacked.header.id,
+                            "changed parent digests must propagate into descendant header ids"
+                        );
+                        assert_ne!(reference.digest(), attacked.digest());
+                    }
+                    reference_known.insert(reference.digest(), reference.origin());
+                    attack_known.insert(attacked.digest(), attacked.origin());
+                }
+                assert!(changed_round_four_proposers.remove(&public_key(4)));
+                let expected_scheduler_affected: HashSet<PublicKey> = CONTROLLED_SCHEDULER_ORDER
+                    [..directly_affected_correct_proposers]
+                    .iter()
+                    .map(|creator| public_key(*creator))
+                    .collect();
+                assert_eq!(
+                    changed_round_four_proposers, expected_scheduler_affected,
+                    "scheduler must affect exactly h correct proposers"
+                );
+
+                let (tusk_slices, mrv_order) =
+                    run_tusk_and_mrv(attack_committee, attack_certificates).await;
+                let tusk_attack_order =
+                    target_b_before_a_in_tusk(&tusk_slices, &target_a, &target_b);
+                let mrv_attack_order = target_b_before_a_in_mrv(&mrv_order, &target_a, &target_b);
+                let snapshot_slice_index =
+                    controlled_snapshot_slice_index(&tusk_slices, &target_a, &target_b);
+                let directly_affected: HashSet<PublicKey> = CONTROLLED_SCHEDULER_ORDER
+                    [..directly_affected_correct_proposers]
+                    .iter()
+                    .map(|creator| public_key(*creator))
+                    .collect();
+                let snapshot_visible_directly_affected_correct_proposers = tusk_slices
+                    .iter()
+                    .take(snapshot_slice_index + 1)
+                    .flat_map(|slice| &slice.certificates)
+                    .filter(|certificate| {
+                        certificate.round() == 4
+                            && directly_affected.contains(&certificate.origin())
+                    })
+                    .map(Certificate::origin)
+                    .collect::<HashSet<_>>()
+                    .len();
+                let snapshot_visible_correct_round_four_proposer_count = tusk_slices
+                    .iter()
+                    .take(snapshot_slice_index + 1)
+                    .flat_map(|slice| &slice.certificates)
+                    .filter(|certificate| {
+                        certificate.round() == 4 && certificate.origin() != public_key(4)
+                    })
+                    .map(Certificate::origin)
+                    .collect::<HashSet<_>>()
+                    .len();
+                assert!(
+                    snapshot_visible_directly_affected_correct_proposers
+                        <= snapshot_visible_correct_round_four_proposer_count,
+                    "directly affected snapshot-visible correct round-4 proposers must be a subset of the denominator"
+                );
+
+                let measurement = controlled_pair_measurement(&tusk_slices, &target_a, &target_b);
+                let component_relation = measurement.component_relation;
+                let b_to_a_crossing = measurement.b_to_a_crossing;
+                let verdict = measurement.verdict;
+                let reverse_edge = matches!(&verdict, PairVerdict::EdgeBToA);
+                let stats = &mut stats[directly_affected_correct_proposers];
+
+                match stats.snapshot_visible_directly_affected_correct_proposers {
+                    Some(previous) => assert_eq!(
+                        previous,
+                        snapshot_visible_directly_affected_correct_proposers
+                    ),
+                    None => {
+                        stats.snapshot_visible_directly_affected_correct_proposers =
+                            Some(snapshot_visible_directly_affected_correct_proposers)
+                    }
+                }
+                match stats.snapshot_visible_correct_round_four_proposer_count {
+                    Some(previous) => {
+                        assert_eq!(previous, snapshot_visible_correct_round_four_proposer_count)
+                    }
+                    None => {
+                        stats.snapshot_visible_correct_round_four_proposer_count =
+                            Some(snapshot_visible_correct_round_four_proposer_count)
+                    }
+                }
+
+                match verdict {
+                    PairVerdict::EdgeAToB => stats.edge_preserved_count += 1,
+                    PairVerdict::NoSignal => stats.edge_suppressed_no_signal_count += 1,
+                    PairVerdict::Conflict => stats.edge_suppressed_conflict_count += 1,
+                    PairVerdict::EdgeBToA => stats.edge_reversed_count += 1,
+                    PairVerdict::Ineligible => stats.ineligible_count += 1,
+                }
+                if let Some(crossing) = b_to_a_crossing {
+                    stats.crossing_count += 1;
+                    match stats.crossing_decomposition {
+                        Some(previous) => assert_eq!(
+                            previous, crossing,
+                            "aggregate B -> A crossing decomposition must be stable within one h condition"
+                        ),
+                        None => stats.crossing_decomposition = Some(crossing),
+                    }
+                }
+                assert!(
+                    !reverse_edge || b_to_a_crossing.is_some(),
+                    "an Edge(B -> A) verdict must contain a B -> A threshold crossing"
+                );
+                if reference_tusk_attack_order {
+                    stats.tusk_reference_attack_order_count += 1;
+                }
+                if tusk_attack_order {
+                    stats.tusk_attack_order_count += 1;
+                }
+                if !reference_tusk_attack_order && tusk_attack_order {
+                    stats.tusk_attack_induced_reversal_count += 1;
+                }
+                if reference_tusk_attack_order && !tusk_attack_order {
+                    stats.tusk_attack_removed_reversal_count += 1;
+                }
+                if mrv_attack_order {
+                    stats.mrv_attack_order_count += 1;
+                    if !reverse_edge {
+                        stats.mrv_attack_order_without_reverse_edge_count += 1;
+                        match component_relation {
+                            TargetComponentRelation::BReachesA => {
+                                stats
+                                    .mrv_attack_order_without_reverse_edge_indirect_path_count += 1
+                            }
+                            TargetComponentRelation::SameScc => {
+                                stats.mrv_attack_order_without_reverse_edge_same_scc_count += 1
+                            }
+                            TargetComponentRelation::IncomparableComponents => {
+                                stats
+                                    .mrv_attack_order_without_reverse_edge_incomparable_components_count += 1
+                            }
+                            TargetComponentRelation::AReachesB => panic!(
+                                "MRV cannot place B before A when the condensation DAG constrains A before B"
+                            ),
+                        }
+                    }
+                }
+            }
+        }
+
+        assert_eq!(reference_edge_count, TRIALS as usize);
+        for (directly_affected_correct_proposers, stats) in stats.iter().enumerate() {
+            assert_eq!(
+                TRIALS as usize,
+                stats.edge_preserved_count
+                    + stats.edge_suppressed_no_signal_count
+                    + stats.edge_suppressed_conflict_count
+                    + stats.edge_reversed_count
+                    + stats.ineligible_count,
+                "adversarial verdict accounting must be exact for h={directly_affected_correct_proposers}"
+            );
+            assert_eq!(
+                stats.tusk_attack_order_count + stats.tusk_attack_removed_reversal_count,
+                stats.tusk_reference_attack_order_count + stats.tusk_attack_induced_reversal_count,
+                "paired Tusk direction transitions must account exactly"
+            );
+            assert_eq!(
+                stats.mrv_attack_order_without_reverse_edge_count,
+                stats.mrv_attack_order_without_reverse_edge_indirect_path_count
+                    + stats.mrv_attack_order_without_reverse_edge_same_scc_count
+                    + stats.mrv_attack_order_without_reverse_edge_incomparable_components_count,
+                "MRV residual target-order outcomes must have one structural classification"
+            );
+            assert_eq!(
+                stats.crossing_count == 0,
+                stats.crossing_decomposition.is_none(),
+                "crossing tuple presence must match the aggregate crossing count"
+            );
+
+            let crossing_round = stats
+                .crossing_decomposition
+                .map(|crossing| crossing.crossing_round.to_string())
+                .unwrap_or_else(|| "none".to_string());
+            let total_delta = stats
+                .crossing_decomposition
+                .map(|crossing| crossing.total_delta.to_string())
+                .unwrap_or_else(|| "none".to_string());
+            let correct_delta = stats
+                .crossing_decomposition
+                .map(|crossing| crossing.correct_delta.to_string())
+                .unwrap_or_else(|| "none".to_string());
+            let byzantine_delta = stats
+                .crossing_decomposition
+                .map(|crossing| crossing.byzantine_delta.to_string())
+                .unwrap_or_else(|| "none".to_string());
+            let a_only_creator_count = stats
+                .crossing_decomposition
+                .map(|crossing| crossing.a_only_creator_count.to_string())
+                .unwrap_or_else(|| "none".to_string());
+            let b_only_creator_count = stats
+                .crossing_decomposition
+                .map(|crossing| crossing.b_only_creator_count.to_string())
+                .unwrap_or_else(|| "none".to_string());
+            let both_creator_count = stats
+                .crossing_decomposition
+                .map(|crossing| crossing.both_creator_count.to_string())
+                .unwrap_or_else(|| "none".to_string());
+            let neither_creator_count = stats
+                .crossing_decomposition
+                .map(|crossing| crossing.neither_creator_count.to_string())
+                .unwrap_or_else(|| "none".to_string());
+
+            println!(
+                "MRV_AdversarialStructureStats directly_affected_correct_proposers={} snapshot_visible_directly_affected_correct_proposers={} snapshot_visible_correct_round_four_proposer_count={} trials={} reference_edge_count={} edge_preserved_count={} edge_suppressed_no_signal_count={} edge_suppressed_conflict_count={} edge_reversed_count={} ineligible_count={} crossing_count={} crossing_round={} total_delta={} correct_delta={} byzantine_delta={} a_only_creator_count={} b_only_creator_count={} both_creator_count={} neither_creator_count={} tusk_reference_attack_order_count={} tusk_attack_order_count={} tusk_attack_induced_reversal_count={} tusk_attack_removed_reversal_count={} mrv_attack_order_count={} mrv_attack_order_without_reverse_edge_count={} mrv_attack_order_without_reverse_edge_indirect_path_count={} mrv_attack_order_without_reverse_edge_same_scc_count={} mrv_attack_order_without_reverse_edge_incomparable_components_count={}",
+                directly_affected_correct_proposers,
+                stats
+                    .snapshot_visible_directly_affected_correct_proposers
+                    .expect("every h condition must record snapshot visibility"),
+                stats
+                    .snapshot_visible_correct_round_four_proposer_count
+                    .expect("every h condition must record the round-4 correct denominator"),
+                TRIALS,
+                reference_edge_count,
+                stats.edge_preserved_count,
+                stats.edge_suppressed_no_signal_count,
+                stats.edge_suppressed_conflict_count,
+                stats.edge_reversed_count,
+                stats.ineligible_count,
+                stats.crossing_count,
+                crossing_round,
+                total_delta,
+                correct_delta,
+                byzantine_delta,
+                a_only_creator_count,
+                b_only_creator_count,
+                both_creator_count,
+                neither_creator_count,
+                stats.tusk_reference_attack_order_count,
+                stats.tusk_attack_order_count,
+                stats.tusk_attack_induced_reversal_count,
+                stats.tusk_attack_removed_reversal_count,
+                stats.mrv_attack_order_count,
+                stats.mrv_attack_order_without_reverse_edge_count,
+                stats.mrv_attack_order_without_reverse_edge_indirect_path_count,
+                stats.mrv_attack_order_without_reverse_edge_same_scc_count,
+                stats.mrv_attack_order_without_reverse_edge_incomparable_components_count,
+            );
+        }
     }
 
     #[tokio::test]
