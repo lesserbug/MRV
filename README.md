@@ -5,10 +5,7 @@ layer to a Narwhal/Tusk-style DAG-BFT stack. It is based on the open-source
 [Narwhal and Tusk](https://github.com/asonnino/narwhal) implementation.
 
 MRV does not modify worker dissemination, voting, or the Tusk commit rule.
-After Tusk emits a committed sub-DAG, MRV uses authenticated creator, round,
-parent, and ancestry metadata already present in the committed DAG to derive a
-deterministic order within that execution slice. Slice membership and the
-order between slices remain fixed by Tusk.
+After Tusk emits a committed sub-DAG, MRV uses authenticated creator and round metadata together with ancestry reconstructed from authenticated parent references to derive a deterministic order within that execution slice. Slice membership and the order between slices remain fixed by Tusk.
 
 This repository is intended for research and benchmarking. It is not
 production software.
@@ -34,9 +31,9 @@ which neither direction crosses `theta`, or a pair for which both directions
 cross receives no visibility-derived edge. Its residual order is then resolved
 by deterministic graph completion.
 
-The threshold attributes a crossing partly to vertices authored by correct
-creators; it does not establish transaction receive-order fairness or make
-correct-creator ancestry independent of message scheduling.
+With `theta = f + 1`, Byzantine creators alone cannot account for a crossing.
+The evidence remains structural rather than a transaction receive-order
+guarantee, and its ancestry may still reflect message scheduling.
 
 ## Repository layout
 
