@@ -8,6 +8,19 @@ use rand::SeedableRng as _;
 use std::collections::{BTreeSet, VecDeque};
 use tokio::sync::mpsc::channel;
 
+// Supply the same archived certificate history as the production primary.
+async fn certificate_store<'a>(certificates: impl IntoIterator<Item = &'a Certificate>) -> store::Store {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../target/exporter-tests-20261008")
+        .join(format!("consensus-{}", rand::random::<u64>()));
+    std::fs::create_dir_all(&path).unwrap();
+    let mut store = store::Store::new(path.to_str().unwrap()).unwrap();
+    for certificate in certificates {
+        store.write(certificate.digest().to_vec(), bincode::serialize(certificate).unwrap()).await;
+    }
+    store
+}
+
 // Fixture
 fn keys() -> Vec<(PublicKey, SecretKey)> {
     let mut rng = StdRng::from_seed([0; 32]);
@@ -52,6 +65,28 @@ fn mock_certificate(
         ..Certificate::default()
     };
     (certificate.digest(), certificate)
+}
+
+#[test]
+fn gc_reclaims_round_caches_without_creator_chain_assumptions() {
+    let names: Vec<_> = keys().into_iter().map(|(name, _)| name).collect();
+    let mut state = State::new(Certificate::genesis(&mock_committee()));
+    for round in 1..=8 {
+        for name in &names {
+            let (digest, certificate) = mock_certificate(*name, round, BTreeSet::new());
+            state.dag.entry(round).or_default().insert(*name, (digest, certificate));
+        }
+    }
+    let (_, higher) = mock_certificate(names[0], 4, BTreeSet::new());
+    state.update(&higher, 4);
+    assert!(state.dag[&1].contains_key(&names[0]),
+        "an undelivered older creator vertex must survive the creator watermark");
+    let (_, later) = mock_certificate(names[1], 8, BTreeSet::new());
+    state.update(&later, 4);
+    assert!(state.dag.keys().all(|round| *round >= 4));
+    assert!(state.delivered.values().all(|round| *round >= 4));
+    assert!(state.dag.values().map(HashMap::len).sum::<usize>() <= names.len() * 5);
+    assert!(state.delivered.len() <= names.len() * 5);
 }
 
 // Creates one certificate per authority starting and finishing at the specified rounds (inclusive).
@@ -116,6 +151,7 @@ async fn commit_one() {
     Consensus::spawn(
         mock_committee(),
         /* gc_depth */ 50,
+        certificate_store(&certificates).await,
         rx_waiter,
         tx_primary,
         tx_output,
@@ -162,6 +198,7 @@ async fn dead_node() {
     Consensus::spawn(
         mock_committee(),
         /* gc_depth */ 50,
+        certificate_store(&certificates).await,
         rx_waiter,
         tx_primary,
         tx_output,
@@ -251,6 +288,7 @@ async fn not_enough_support() {
     Consensus::spawn(
         mock_committee(),
         /* gc_depth */ 50,
+        certificate_store(&certificates).await,
         rx_waiter,
         tx_primary,
         tx_output,
@@ -315,6 +353,7 @@ async fn missing_leader() {
     Consensus::spawn(
         mock_committee(),
         /* gc_depth */ 50,
+        certificate_store(&certificates).await,
         rx_waiter,
         tx_primary,
         tx_output,
@@ -361,6 +400,7 @@ async fn stale_certificate_is_not_exported_after_a_higher_creator_round() {
         .expect("round-1 leader certificate must exist")
         .clone();
     let stale_digest = stale.digest();
+    let store = certificate_store(&certificates).await;
     let (early, late): (Vec<_>, Vec<_>) = certificates
         .into_iter()
         .partition(|certificate| certificate.round() <= 5);
@@ -368,7 +408,7 @@ async fn stale_certificate_is_not_exported_after_a_higher_creator_round() {
     let (tx_waiter, rx_waiter) = channel(64);
     let (tx_primary, mut rx_primary) = channel(16);
     let (tx_output, mut rx_output) = channel(16);
-    Consensus::spawn(committee, 50, rx_waiter, tx_primary, tx_output);
+    Consensus::spawn(committee, 50, store, rx_waiter, tx_primary, tx_output);
     tokio::spawn(async move { while rx_primary.recv().await.is_some() {} });
 
     for certificate in early {

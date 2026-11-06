@@ -1,11 +1,15 @@
 # MRV
 
+[Supplementary material](Pengkun_Ren_ICDE2027_Supplementary.pdf) · [Code](code/) · [Experimental artifacts](code/output/INDEX.md)
+
 MRV is a research prototype that adds a post-consensus structural ordering
 layer to a Narwhal/Tusk-style DAG-BFT stack. It is based on the open-source
 [Narwhal and Tusk](https://github.com/asonnino/narwhal) implementation.
 
-MRV does not modify worker dissemination, voting, or the Tusk commit rule.
+MRV preserves worker dissemination and the Tusk commit rule.
 After Tusk emits a committed sub-DAG, MRV uses authenticated creator and round metadata together with ancestry reconstructed from authenticated parent references to derive a deterministic order within that execution slice. Slice membership and the order between slices remain fixed by Tusk.
+
+The primary also checks the GC boundary before voting, including on resumed paths.
 
 This repository is intended for research and benchmarking. It is not
 production software.
@@ -39,16 +43,21 @@ guarantee, and its ancestry may still reflect message scheduling.
 
 ```text
 .
-├── benchmark/       # Local and AWS benchmark harnesses
-├── config/          # Committee and protocol configuration
-├── consensus/       # Unmodified Tusk consensus and committed-DAG export
-├── crypto/          # Cryptographic primitives
-├── mrv_executor/    # MRV post-consensus ordering layer
-├── network/         # Networking utilities
-├── node/            # Node binary and MRV pipeline wiring
-├── primary/         # Narwhal primary
-├── store/           # RocksDB-backed storage
-└── worker/          # Narwhal worker
+├── Pengkun_Ren_ICDE2027_Supplementary.pdf
+├── code/
+│   ├── benchmark/       # AWS and benchmark harnesses
+│   ├── config/          # Committee and protocol configuration
+│   ├── consensus/       # Tusk commitment and ancestry-complete export
+│   ├── crypto/          # Cryptographic primitives
+│   ├── mrv_executor/    # MRV post-consensus ordering layer
+│   ├── network/         # Networking utilities
+│   ├── node/            # Node binary and pipeline wiring
+│   ├── primary/         # Narwhal primary and voting safeguards
+│   ├── store/           # RocksDB-backed storage
+│   ├── worker/          # Narwhal worker
+│   └── output/          # Selected experimental artifacts
+├── README.md
+└── LICENSE
 ```
 
 The protocol implementation is written in Rust. Benchmark orchestration is
@@ -59,96 +68,12 @@ written in Python and uses Fabric.
 - A Rust toolchain
 - Python 3.9+
 - Clang, required when building RocksDB
-- `tmux`, used by the local and remote benchmark harnesses
+- `tmux`, used by the benchmark harnesses
 - AWS credentials, only for remote experiments
-
-Clone the MRV branch and install the benchmark dependencies:
-
-```bash
-git clone https://github.com/lesserbug/MRV.git
-cd MRV
-git checkout mrv-dev7
-cd benchmark
-pip install -r requirements.txt
-```
-
-## Build and test
-
-From the repository root, run the MRV test suite with benchmark-only
-instrumentation enabled:
-
-```bash
-cargo test -p mrv_executor --features benchmark
-```
-
-The controlled structural experiments can be run individually:
-
-```bash
-cargo test -p mrv_executor --features benchmark \
-  controlled_visibility_experiment -- --nocapture
-
-cargo test -p mrv_executor --features benchmark \
-  controlled_tusk_vs_mrv_experiment -- --nocapture
-
-cargo test -p mrv_executor --features benchmark \
-  controlled_adversarial_structure_experiment -- --nocapture
-```
-
-`controlled_adversarial_structure_experiment` is a controlled
-parent-availability sensitivity experiment over structurally valid synthetic
-DAGs. It conditions on valid first-quorum parent sets and does not emulate a
-live network scheduler or estimate attack success in a distributed deployment.
-Its aggregate records are printed with the
-`MRV_AdversarialStructureStats` marker.
-
-## Local benchmarks
-
-The benchmark parameters are defined in [`benchmark/fabfile.py`](benchmark/fabfile.py).
-Edit its `bench_params` and `node_params` dictionaries to select committee
-size, offered load, duration, and MRV window. Then run:
-
-```bash
-cd benchmark
-fab local
-```
-
-The `local` task expands an `mrv_window` list into separate fixed-window runs.
-It does not accept committee size, rate, or fairness-summary options on the
-command line.
-
-Important parameters include:
-
-- `nodes`: committee size
-- `workers`: workers per validator
-- `faults`: configured fault parameter
-- `rate`: offered transaction load
-- `tx_size`: transaction size
-- `batch_size`: preferred worker batch size
-- `max_batch_delay`: maximum worker batch delay
-- `max_header_delay`: maximum primary header delay
-- `gc_depth`: base-protocol committed-history retention depth
-- `mrv_window`: independent fixed MRV comparison window in DAG rounds; a list
-  requests a window sweep
-- `drain_duration`: time allowed for pending slices to reach final output after
-  clients stop submitting transactions
-
-The benchmark feature records per-slice aggregate metrics, including
-eligibility, pair verdicts, direct and direct-or-transitive coverage,
-constrained inversions relative to Tusk, seal delay, and final execution-order
-agreement.
-
-Artifacts are written under:
-
-```text
-benchmark/logs/                    # Raw process logs
-benchmark/results/                 # Performance summaries
-benchmark/results/mrv-slice-stats.csv
-benchmark/plots/                   # Generated figures
-```
 
 ## AWS benchmarks
 
-Before creating a testbed, edit `benchmark/settings.json`. For example:
+Before creating a testbed, edit `code/benchmark/settings.json`. For example:
 
 ```json
 {
@@ -178,7 +103,7 @@ Before creating a testbed, edit `benchmark/settings.json`. For example:
 Create and inspect a testbed:
 
 ```bash
-cd benchmark
+cd code/benchmark
 fab create --nodes=10
 fab info
 ```

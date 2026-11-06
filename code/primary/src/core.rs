@@ -181,8 +181,8 @@ impl Core {
         let bytes = bincode::serialize(header).expect("Failed to serialize header");
         self.store.write(header.id.to_vec(), bytes).await;
 
-        // Check if we can vote for this header.
-        if self
+        // Waiter loopbacks can outlive the vote records for their round.
+        if header.round >= self.gc_round && self
             .last_voted
             .entry(header.round)
             .or_insert_with(HashSet::new)

@@ -1,0 +1,2177 @@
+{
+  "scope": "abstract DAG/exporter-contract witness, not a protocol execution",
+  "parameters": {
+    "n": 4,
+    "f": 1,
+    "q": 3,
+    "q_vis": 3,
+    "theta": 2,
+    "W": 4
+  },
+  "targets": {
+    "A": "V3",
+    "B": "Z2"
+  },
+  "fixed_faulty_creator": "Z",
+  "checks": {
+    "parent_quorum_and_previous_round": true,
+    "creator_round_uniqueness": true,
+    "content_addressed_parent_consistency": true,
+    "nested_ancestor_closed_prefixes": true,
+    "exact_once_causal_slice_delivery": true,
+    "selected_snapshot_first_horizon": true,
+    "correct_presence_and_target_bits_fixed": true,
+    "fixed_complete_target_headers": true,
+    "faulty_contribution_nontrivially_changes": true,
+    "correct_only_eligibility_and_direction_Q": true,
+    "full_target_slice_graph_acyclic": true,
+    "MRV_A_first_causal_key_B_first": true
+  },
+  "changed_correct_abstract_header_digests": [
+    "U5",
+    "V5",
+    "W5",
+    "U6",
+    "V6",
+    "W6",
+    "V7",
+    "W7",
+    "U8",
+    "V8",
+    "W8",
+    "U9",
+    "V9",
+    "W9",
+    "W10"
+  ],
+  "inputs": [
+    {
+      "variant": "minus",
+      "parents": {
+        "U0": [],
+        "V0": [],
+        "W0": [],
+        "Z0": [],
+        "U1": [
+          "U0",
+          "V0",
+          "W0"
+        ],
+        "U2": [
+          "U1",
+          "V1",
+          "W1"
+        ],
+        "V1": [
+          "U0",
+          "V0",
+          "W0"
+        ],
+        "V2": [
+          "U1",
+          "V1",
+          "W1"
+        ],
+        "W1": [
+          "U0",
+          "V0",
+          "W0"
+        ],
+        "W2": [
+          "U1",
+          "V1",
+          "W1"
+        ],
+        "Z1": [
+          "U0",
+          "V0",
+          "W0"
+        ],
+        "Z2": [
+          "U1",
+          "V1",
+          "W1"
+        ],
+        "U3": [
+          "U2",
+          "V2",
+          "W2"
+        ],
+        "U4": [
+          "U3",
+          "V3",
+          "W3"
+        ],
+        "U5": [
+          "V4",
+          "W4",
+          "Z4"
+        ],
+        "U6": [
+          "U5",
+          "V5",
+          "W5"
+        ],
+        "U7": [
+          "U6",
+          "V6",
+          "W6"
+        ],
+        "U8": [
+          "V7",
+          "W7",
+          "Z7"
+        ],
+        "U9": [
+          "U8",
+          "V8",
+          "W8"
+        ],
+        "U10": [
+          "U9",
+          "V9",
+          "W9"
+        ],
+        "V3": [
+          "U2",
+          "V2",
+          "W2"
+        ],
+        "V4": [
+          "U3",
+          "V3",
+          "W3"
+        ],
+        "V5": [
+          "V4",
+          "W4",
+          "Z4"
+        ],
+        "V6": [
+          "U5",
+          "V5",
+          "W5"
+        ],
+        "V7": [
+          "U6",
+          "V6",
+          "W6"
+        ],
+        "V8": [
+          "V7",
+          "W7",
+          "Z7"
+        ],
+        "V9": [
+          "U8",
+          "V8",
+          "W8"
+        ],
+        "V10": [
+          "U9",
+          "V9",
+          "W9"
+        ],
+        "W3": [
+          "U2",
+          "V2",
+          "W2"
+        ],
+        "W4": [
+          "U3",
+          "V3",
+          "W3"
+        ],
+        "W5": [
+          "V4",
+          "W4",
+          "Z4"
+        ],
+        "W6": [
+          "U5",
+          "V5",
+          "W5"
+        ],
+        "W7": [
+          "U6",
+          "V6",
+          "W6"
+        ],
+        "W8": [
+          "V7",
+          "W7",
+          "Z7"
+        ],
+        "W9": [
+          "U8",
+          "V8",
+          "W8"
+        ],
+        "W10": [
+          "U9",
+          "V9",
+          "W9"
+        ],
+        "Z3": [
+          "Z2",
+          "U2",
+          "W2"
+        ],
+        "Z4": [
+          "Z3",
+          "U3",
+          "W3"
+        ],
+        "Z5": [
+          "U4",
+          "V4",
+          "Z4"
+        ],
+        "Z6": [
+          "U5",
+          "V5",
+          "Z5"
+        ],
+        "Z7": [
+          "U6",
+          "V6",
+          "Z6"
+        ]
+      },
+      "abstract_header_digests": {
+        "U0": "1c31e4f9846307778488f454c0d23ace3e5dd4d056d907cd47dcd9afa4a2f7f4",
+        "V0": "d97f69c8cce0c115ad600ee6886c249baadef5341d988334e8d3da39b982cd6a",
+        "W0": "58b73ed01b829a10e7a9fc726e608d65b687c1f165bc653a7e3deb0b21ebfed0",
+        "Z0": "4bcb48712fbe9e074177a921178089b52d97f19a206b9ff6f268a7fad245a833",
+        "U1": "254dfc8f067f4dcbdcc4954309d57f46de2f3abb009446cad8ec1cd57224d850",
+        "V1": "445aa7b3a2db26c1f9a4970dbc9877ffca115abd83bf3b99fe500acf87a1d86b",
+        "W1": "dfc1d48be7e77bbb746c110612a02f301842b9402553e5b855c58f594a35f815",
+        "Z1": "cd4a44f3268965ae7e9e6d8bfdce1ca652e9025af8a869db09c04060867954ab",
+        "U2": "2f22351a839de956b4cf9810e40bbf7ee7521887ed022d9d25ce82d2f5a881e0",
+        "V2": "c376b4eb32e22697907ad3df324aca35ea9bea307dd0b6338d2fc3129cad7b94",
+        "W2": "253d239303d8cf0caa635c6613d899cc9d40b968c8ebb1e53d5b797d68185f67",
+        "Z2": "ed9ddef37650b9281c7b11420e97f3eeaf45ddb51674791bb82b7e447530bde0",
+        "U3": "aedd51be93387b56ba9da07e0331366d7fd6929b56b4d4f7035af4262447ddd7",
+        "V3": "d2e75bacb0bade36be4d65c4740cedac15910e0f63a4c99fb57007c29fa30b34",
+        "W3": "15af5b60e58c739843623416d92207adc1cb711a2f501e7dd384484781810a92",
+        "Z3": "ae27ee895f4fe9c12aa9ad89330f2bcb4eea4666092e7b032f87520e1ba779f3",
+        "U4": "feb0f622292a372622491da6733adeba81495c2e43f0c5163c13d96a6562cb15",
+        "V4": "374f6d01a7d1672f2d37c500e3ea2f91e2e6243472fee8bb312aa14671e34671",
+        "W4": "84471ab17eaa7724fa92427c730b7ad89ccbad067e71d16ab44e59c725372d05",
+        "Z4": "f0f09f74ba52245c08e28024cf6dc7adedc937595e189c5b3c843c926966a9c8",
+        "U5": "b038091296b0311edc034be3583fa11155149a995c61dd2e5ec2972ca93d86e9",
+        "V5": "7a50dce848e8407e7b8c41432d8a93d444358a05bf1d11a72b86f7c7c5c5e950",
+        "W5": "8c586d349a94b10a46b99aa45f74e7a7d1ba9a76af2f5659d1dc169979e82672",
+        "Z5": "c28886555d9b5dcf702686d3c4a24e5ab696a48a4c83f86546648bfe237d41f3",
+        "U6": "29cff8c8259f804fe6d1405e8119b967a0ef3ef8e67a9128e07c53a96f10b9be",
+        "V6": "5da7091c33fc19449aa2a8e41f193a7122e2669841bea55e26dc0a95169d727a",
+        "W6": "7a1d4881cd72800f87a4db0d20e558896f987a01310d93428844b496afb43e5a",
+        "Z6": "94d8c7d9781ffaf22d297e3735c98a85d4eff396f9541443285ae0519eeda82d",
+        "U7": "cee3cbb43883812e89036ce9f4fef09e5289428469e3a3a80146028ab8330eba",
+        "V7": "363fccf2621251d48e29106194b1f9266f7c276fed6cf2ed113763568530e8d0",
+        "W7": "d34f37c0488961c5589024102e220d5d40abbbe66c7cf06161d8200f1709d105",
+        "Z7": "9b3f6db72c59f51df04e8521b3218616222eb5bbe723dca6c94b3313ba2af75c",
+        "U8": "c2437e48140b950dcf80a2aa85fadf56d848631166db8b8c272d1fee8096aa2f",
+        "V8": "ac1fa9106652b5991b79d5cd4f70d363c21afebef1d7c4d827502ac5b5a7b921",
+        "W8": "f228b2f3059cc125d6cbf01f4a01182cda4d7dc09cb1659db4e66c5497e67be1",
+        "U9": "5ef5f59e3fb20be1f60a146215cb32095f912ef37b29c1544e34d51e2e7284da",
+        "V9": "855ebfc8baa7ff70920dff5af7ca3020a6308994fc6c0006f9de22f4412ebff5",
+        "W9": "72c01a45d54496efd06bcd5f1848e98f1c00ee505037edc73d962b1cfdd2aa42",
+        "U10": "31b701694fb69fbc457668428a04bd6d0ec8e6cb3336388b08949abec60e6216",
+        "V10": "92e9a555f596cfaafd356559ccf9c92e65b90f07575e2d0f463c3dc3549171c7",
+        "W10": "764a191d9ff31f92dd7b00cb5dbd65723cc6b6b50ad52adda89f5165ee8df077"
+      },
+      "events": [
+        {
+          "index": 1,
+          "leader": "W2",
+          "rho": 2,
+          "prefix": [
+            "U0",
+            "V0",
+            "W0",
+            "Z0",
+            "U1",
+            "V1",
+            "W1",
+            "W2"
+          ],
+          "slice": [
+            "U1",
+            "V1",
+            "W1",
+            "W2"
+          ]
+        },
+        {
+          "index": 2,
+          "leader": "W6",
+          "rho": 6,
+          "prefix": [
+            "U0",
+            "V0",
+            "W0",
+            "Z0",
+            "U1",
+            "V1",
+            "W1",
+            "U2",
+            "V2",
+            "W2",
+            "Z2",
+            "U3",
+            "V3",
+            "W3",
+            "Z3",
+            "V4",
+            "W4",
+            "Z4",
+            "U5",
+            "V5",
+            "W5",
+            "W6"
+          ],
+          "slice": [
+            "U2",
+            "V2",
+            "Z2",
+            "U3",
+            "V3",
+            "W3",
+            "Z3",
+            "V4",
+            "W4",
+            "Z4",
+            "U5",
+            "V5",
+            "W5",
+            "W6"
+          ]
+        },
+        {
+          "index": 3,
+          "leader": "U8",
+          "rho": 8,
+          "prefix": [
+            "U0",
+            "V0",
+            "W0",
+            "Z0",
+            "U1",
+            "V1",
+            "W1",
+            "U2",
+            "V2",
+            "W2",
+            "Z2",
+            "U3",
+            "V3",
+            "W3",
+            "Z3",
+            "U4",
+            "V4",
+            "W4",
+            "Z4",
+            "U5",
+            "V5",
+            "W5",
+            "Z5",
+            "U6",
+            "V6",
+            "W6",
+            "Z6",
+            "V7",
+            "W7",
+            "Z7",
+            "U8"
+          ],
+          "slice": [
+            "U4",
+            "Z5",
+            "U6",
+            "V6",
+            "Z6",
+            "V7",
+            "W7",
+            "Z7",
+            "U8"
+          ]
+        },
+        {
+          "index": 4,
+          "leader": "W10",
+          "rho": 10,
+          "prefix": [
+            "U0",
+            "V0",
+            "W0",
+            "Z0",
+            "U1",
+            "V1",
+            "W1",
+            "U2",
+            "V2",
+            "W2",
+            "Z2",
+            "U3",
+            "V3",
+            "W3",
+            "Z3",
+            "U4",
+            "V4",
+            "W4",
+            "Z4",
+            "U5",
+            "V5",
+            "W5",
+            "Z5",
+            "U6",
+            "V6",
+            "W6",
+            "Z6",
+            "V7",
+            "W7",
+            "Z7",
+            "U8",
+            "V8",
+            "W8",
+            "U9",
+            "V9",
+            "W9",
+            "W10"
+          ],
+          "slice": [
+            "V8",
+            "W8",
+            "U9",
+            "V9",
+            "W9",
+            "W10"
+          ]
+        }
+      ],
+      "target_slice_index": 2,
+      "horizon": 10,
+      "selected_event": 4,
+      "selected_prefix_digest": "7d82b3a496ac316897f855cdc267e639ae94ae469cb03c812ffdd0f2bb99d4da",
+      "target_windows": {
+        "I_A": [
+          3,
+          4,
+          5,
+          6,
+          7
+        ],
+        "I_B": [
+          2,
+          3,
+          4,
+          5,
+          6
+        ],
+        "J": [
+          4,
+          5,
+          6,
+          7
+        ]
+      },
+      "observation_table": [
+        {
+          "round": 2,
+          "bits": {
+            "U": {
+              "present": true,
+              "A": false,
+              "B": false
+            },
+            "V": {
+              "present": true,
+              "A": false,
+              "B": false
+            },
+            "W": {
+              "present": true,
+              "A": false,
+              "B": false
+            },
+            "Z": {
+              "present": true,
+              "A": false,
+              "B": true
+            }
+          },
+          "C_A_cor": 0,
+          "C_B_cor": 0,
+          "D_cor": 0,
+          "C_A": 0,
+          "C_B": 1,
+          "Delta": -1
+        },
+        {
+          "round": 3,
+          "bits": {
+            "U": {
+              "present": true,
+              "A": false,
+              "B": false
+            },
+            "V": {
+              "present": true,
+              "A": true,
+              "B": false
+            },
+            "W": {
+              "present": true,
+              "A": false,
+              "B": false
+            },
+            "Z": {
+              "present": true,
+              "A": false,
+              "B": true
+            }
+          },
+          "C_A_cor": 1,
+          "C_B_cor": 0,
+          "D_cor": 1,
+          "C_A": 1,
+          "C_B": 1,
+          "Delta": 0
+        },
+        {
+          "round": 4,
+          "bits": {
+            "U": {
+              "present": true,
+              "A": true,
+              "B": false
+            },
+            "V": {
+              "present": true,
+              "A": true,
+              "B": false
+            },
+            "W": {
+              "present": true,
+              "A": true,
+              "B": false
+            },
+            "Z": {
+              "present": true,
+              "A": false,
+              "B": true
+            }
+          },
+          "C_A_cor": 3,
+          "C_B_cor": 0,
+          "D_cor": 3,
+          "C_A": 3,
+          "C_B": 1,
+          "Delta": 2
+        },
+        {
+          "round": 5,
+          "bits": {
+            "U": {
+              "present": true,
+              "A": true,
+              "B": true
+            },
+            "V": {
+              "present": true,
+              "A": true,
+              "B": true
+            },
+            "W": {
+              "present": true,
+              "A": true,
+              "B": true
+            },
+            "Z": {
+              "present": true,
+              "A": true,
+              "B": true
+            }
+          },
+          "C_A_cor": 3,
+          "C_B_cor": 3,
+          "D_cor": 0,
+          "C_A": 4,
+          "C_B": 4,
+          "Delta": 0
+        },
+        {
+          "round": 6,
+          "bits": {
+            "U": {
+              "present": true,
+              "A": true,
+              "B": true
+            },
+            "V": {
+              "present": true,
+              "A": true,
+              "B": true
+            },
+            "W": {
+              "present": true,
+              "A": true,
+              "B": true
+            },
+            "Z": {
+              "present": true,
+              "A": true,
+              "B": true
+            }
+          },
+          "C_A_cor": 3,
+          "C_B_cor": 3,
+          "D_cor": 0,
+          "C_A": 4,
+          "C_B": 4,
+          "Delta": 0
+        },
+        {
+          "round": 7,
+          "bits": {
+            "U": {
+              "present": false,
+              "A": false,
+              "B": false
+            },
+            "V": {
+              "present": true,
+              "A": true,
+              "B": true
+            },
+            "W": {
+              "present": true,
+              "A": true,
+              "B": true
+            },
+            "Z": {
+              "present": true,
+              "A": true,
+              "B": true
+            }
+          },
+          "C_A_cor": 2,
+          "C_B_cor": 2,
+          "D_cor": 0,
+          "C_A": 3,
+          "C_B": 3,
+          "Delta": 0
+        }
+      ],
+      "correct_only_eligibility_witnesses": {
+        "A": [
+          4,
+          5,
+          6
+        ],
+        "B": [
+          5,
+          6
+        ]
+      },
+      "all_target_slice_vertices_eligible": true,
+      "graph_edges": [
+        [
+          "U2",
+          "Z2"
+        ],
+        [
+          "U2",
+          "U3"
+        ],
+        [
+          "U2",
+          "V3"
+        ],
+        [
+          "U2",
+          "W3"
+        ],
+        [
+          "U2",
+          "Z3"
+        ],
+        [
+          "U2",
+          "V4"
+        ],
+        [
+          "U2",
+          "W4"
+        ],
+        [
+          "U2",
+          "Z4"
+        ],
+        [
+          "U2",
+          "U5"
+        ],
+        [
+          "U2",
+          "V5"
+        ],
+        [
+          "U2",
+          "W5"
+        ],
+        [
+          "U2",
+          "W6"
+        ],
+        [
+          "V2",
+          "Z2"
+        ],
+        [
+          "V2",
+          "U3"
+        ],
+        [
+          "V2",
+          "V3"
+        ],
+        [
+          "V2",
+          "W3"
+        ],
+        [
+          "V2",
+          "Z3"
+        ],
+        [
+          "V2",
+          "V4"
+        ],
+        [
+          "V2",
+          "W4"
+        ],
+        [
+          "V2",
+          "Z4"
+        ],
+        [
+          "V2",
+          "U5"
+        ],
+        [
+          "V2",
+          "V5"
+        ],
+        [
+          "V2",
+          "W5"
+        ],
+        [
+          "V2",
+          "W6"
+        ],
+        [
+          "Z2",
+          "Z3"
+        ],
+        [
+          "Z2",
+          "Z4"
+        ],
+        [
+          "Z2",
+          "U5"
+        ],
+        [
+          "Z2",
+          "V5"
+        ],
+        [
+          "Z2",
+          "W5"
+        ],
+        [
+          "Z2",
+          "W6"
+        ],
+        [
+          "U3",
+          "Z2"
+        ],
+        [
+          "U3",
+          "Z3"
+        ],
+        [
+          "U3",
+          "V4"
+        ],
+        [
+          "U3",
+          "W4"
+        ],
+        [
+          "U3",
+          "Z4"
+        ],
+        [
+          "U3",
+          "U5"
+        ],
+        [
+          "U3",
+          "V5"
+        ],
+        [
+          "U3",
+          "W5"
+        ],
+        [
+          "U3",
+          "W6"
+        ],
+        [
+          "V3",
+          "Z2"
+        ],
+        [
+          "V3",
+          "Z3"
+        ],
+        [
+          "V3",
+          "V4"
+        ],
+        [
+          "V3",
+          "W4"
+        ],
+        [
+          "V3",
+          "U5"
+        ],
+        [
+          "V3",
+          "V5"
+        ],
+        [
+          "V3",
+          "W5"
+        ],
+        [
+          "V3",
+          "W6"
+        ],
+        [
+          "W3",
+          "Z2"
+        ],
+        [
+          "W3",
+          "Z3"
+        ],
+        [
+          "W3",
+          "V4"
+        ],
+        [
+          "W3",
+          "W4"
+        ],
+        [
+          "W3",
+          "Z4"
+        ],
+        [
+          "W3",
+          "U5"
+        ],
+        [
+          "W3",
+          "V5"
+        ],
+        [
+          "W3",
+          "W5"
+        ],
+        [
+          "W3",
+          "W6"
+        ],
+        [
+          "Z3",
+          "Z4"
+        ],
+        [
+          "Z3",
+          "U5"
+        ],
+        [
+          "Z3",
+          "V5"
+        ],
+        [
+          "Z3",
+          "W5"
+        ],
+        [
+          "Z3",
+          "W6"
+        ],
+        [
+          "V4",
+          "U5"
+        ],
+        [
+          "V4",
+          "V5"
+        ],
+        [
+          "V4",
+          "W5"
+        ],
+        [
+          "V4",
+          "W6"
+        ],
+        [
+          "W4",
+          "U5"
+        ],
+        [
+          "W4",
+          "V5"
+        ],
+        [
+          "W4",
+          "W5"
+        ],
+        [
+          "W4",
+          "W6"
+        ],
+        [
+          "Z4",
+          "U5"
+        ],
+        [
+          "Z4",
+          "V5"
+        ],
+        [
+          "Z4",
+          "W5"
+        ],
+        [
+          "Z4",
+          "W6"
+        ],
+        [
+          "U5",
+          "W6"
+        ],
+        [
+          "V5",
+          "W6"
+        ],
+        [
+          "W5",
+          "W6"
+        ]
+      ],
+      "visibility_edges": [
+        {
+          "from": "U2",
+          "to": "Z2",
+          "margins": [
+            3,
+            3,
+            0,
+            0
+          ]
+        },
+        {
+          "from": "V2",
+          "to": "Z2",
+          "margins": [
+            2,
+            3,
+            0,
+            0
+          ]
+        },
+        {
+          "from": "V2",
+          "to": "Z3",
+          "margins": [
+            3,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "from": "U3",
+          "to": "Z2",
+          "margins": [
+            3,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "from": "U3",
+          "to": "Z3",
+          "margins": [
+            3,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "from": "V3",
+          "to": "Z2",
+          "margins": [
+            2,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "from": "V3",
+          "to": "Z3",
+          "margins": [
+            2,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "from": "W3",
+          "to": "Z2",
+          "margins": [
+            3,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "from": "W3",
+          "to": "Z3",
+          "margins": [
+            3,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "graph_edge_count": 76,
+      "causal_edge_count": 67,
+      "order_with_key_round_creator": [
+        "U2",
+        "V2",
+        "U3",
+        "V3",
+        "W3",
+        "Z2",
+        "Z3",
+        "V4",
+        "W4",
+        "Z4",
+        "U5",
+        "V5",
+        "W5",
+        "W6"
+      ],
+      "causal_only_order_with_same_key": [
+        "U2",
+        "V2",
+        "Z2",
+        "U3",
+        "V3",
+        "W3",
+        "Z3",
+        "V4",
+        "W4",
+        "Z4",
+        "U5",
+        "V5",
+        "W5",
+        "W6"
+      ]
+    },
+    {
+      "variant": "plus",
+      "parents": {
+        "U0": [],
+        "V0": [],
+        "W0": [],
+        "Z0": [],
+        "U1": [
+          "U0",
+          "V0",
+          "W0"
+        ],
+        "U2": [
+          "U1",
+          "V1",
+          "W1"
+        ],
+        "V1": [
+          "U0",
+          "V0",
+          "W0"
+        ],
+        "V2": [
+          "U1",
+          "V1",
+          "W1"
+        ],
+        "W1": [
+          "U0",
+          "V0",
+          "W0"
+        ],
+        "W2": [
+          "U1",
+          "V1",
+          "W1"
+        ],
+        "Z1": [
+          "U0",
+          "V0",
+          "W0"
+        ],
+        "Z2": [
+          "U1",
+          "V1",
+          "W1"
+        ],
+        "U3": [
+          "U2",
+          "V2",
+          "W2"
+        ],
+        "U4": [
+          "U3",
+          "V3",
+          "W3"
+        ],
+        "U5": [
+          "V4",
+          "W4",
+          "Z4"
+        ],
+        "U6": [
+          "U5",
+          "V5",
+          "W5"
+        ],
+        "U7": [
+          "U6",
+          "V6",
+          "W6"
+        ],
+        "U8": [
+          "V7",
+          "W7",
+          "Z7"
+        ],
+        "U9": [
+          "U8",
+          "V8",
+          "W8"
+        ],
+        "U10": [
+          "U9",
+          "V9",
+          "W9"
+        ],
+        "V3": [
+          "U2",
+          "V2",
+          "W2"
+        ],
+        "V4": [
+          "U3",
+          "V3",
+          "W3"
+        ],
+        "V5": [
+          "V4",
+          "W4",
+          "Z4"
+        ],
+        "V6": [
+          "U5",
+          "V5",
+          "W5"
+        ],
+        "V7": [
+          "U6",
+          "V6",
+          "W6"
+        ],
+        "V8": [
+          "V7",
+          "W7",
+          "Z7"
+        ],
+        "V9": [
+          "U8",
+          "V8",
+          "W8"
+        ],
+        "V10": [
+          "U9",
+          "V9",
+          "W9"
+        ],
+        "W3": [
+          "U2",
+          "V2",
+          "W2"
+        ],
+        "W4": [
+          "U3",
+          "V3",
+          "W3"
+        ],
+        "W5": [
+          "V4",
+          "W4",
+          "Z4"
+        ],
+        "W6": [
+          "U5",
+          "V5",
+          "W5"
+        ],
+        "W7": [
+          "U6",
+          "V6",
+          "W6"
+        ],
+        "W8": [
+          "V7",
+          "W7",
+          "Z7"
+        ],
+        "W9": [
+          "U8",
+          "V8",
+          "W8"
+        ],
+        "W10": [
+          "U9",
+          "V9",
+          "W9"
+        ],
+        "Z3": [
+          "Z2",
+          "U2",
+          "W2"
+        ],
+        "Z4": [
+          "Z3",
+          "V3",
+          "U3"
+        ],
+        "Z5": [
+          "U4",
+          "V4",
+          "Z4"
+        ],
+        "Z6": [
+          "U5",
+          "V5",
+          "Z5"
+        ],
+        "Z7": [
+          "U6",
+          "V6",
+          "Z6"
+        ]
+      },
+      "abstract_header_digests": {
+        "U0": "1c31e4f9846307778488f454c0d23ace3e5dd4d056d907cd47dcd9afa4a2f7f4",
+        "V0": "d97f69c8cce0c115ad600ee6886c249baadef5341d988334e8d3da39b982cd6a",
+        "W0": "58b73ed01b829a10e7a9fc726e608d65b687c1f165bc653a7e3deb0b21ebfed0",
+        "Z0": "4bcb48712fbe9e074177a921178089b52d97f19a206b9ff6f268a7fad245a833",
+        "U1": "254dfc8f067f4dcbdcc4954309d57f46de2f3abb009446cad8ec1cd57224d850",
+        "V1": "445aa7b3a2db26c1f9a4970dbc9877ffca115abd83bf3b99fe500acf87a1d86b",
+        "W1": "dfc1d48be7e77bbb746c110612a02f301842b9402553e5b855c58f594a35f815",
+        "Z1": "cd4a44f3268965ae7e9e6d8bfdce1ca652e9025af8a869db09c04060867954ab",
+        "U2": "2f22351a839de956b4cf9810e40bbf7ee7521887ed022d9d25ce82d2f5a881e0",
+        "V2": "c376b4eb32e22697907ad3df324aca35ea9bea307dd0b6338d2fc3129cad7b94",
+        "W2": "253d239303d8cf0caa635c6613d899cc9d40b968c8ebb1e53d5b797d68185f67",
+        "Z2": "ed9ddef37650b9281c7b11420e97f3eeaf45ddb51674791bb82b7e447530bde0",
+        "U3": "aedd51be93387b56ba9da07e0331366d7fd6929b56b4d4f7035af4262447ddd7",
+        "V3": "d2e75bacb0bade36be4d65c4740cedac15910e0f63a4c99fb57007c29fa30b34",
+        "W3": "15af5b60e58c739843623416d92207adc1cb711a2f501e7dd384484781810a92",
+        "Z3": "ae27ee895f4fe9c12aa9ad89330f2bcb4eea4666092e7b032f87520e1ba779f3",
+        "U4": "feb0f622292a372622491da6733adeba81495c2e43f0c5163c13d96a6562cb15",
+        "V4": "374f6d01a7d1672f2d37c500e3ea2f91e2e6243472fee8bb312aa14671e34671",
+        "W4": "84471ab17eaa7724fa92427c730b7ad89ccbad067e71d16ab44e59c725372d05",
+        "Z4": "00795e2824c280215b83943b2fd9e388d72913af1fc6d051bd6aa32f222fab09",
+        "U5": "0a60f733d408782d77bc8e3c6b88b6812ce4f47e915b50819773c12e0d450951",
+        "V5": "6970211c9944dd1358309aaf82585ec642233007767c9eb4ddd46f922aad013f",
+        "W5": "6dc4eb2b515c0e14a5ab0965ec6425fda589edbbe1cbbb050ab7ed503478cf5c",
+        "Z5": "d7d86d9f8c040128966f4d93b1681044b31b808d93fe0c8553b370f47a07c4a1",
+        "U6": "ea1b4a586cc8456cfe9ca857625076d32088d2d7b4d1cb8587eec6ae179b731b",
+        "V6": "f802b79575e47487bf9b095da5a8c18d24eaf596fec4d43287865373a0854db2",
+        "W6": "d14183283eb808533562da9d438b089654e227d7ea8235c750ea2ac17b3891ba",
+        "Z6": "64d1bd0139452a3404901824b0ad9bcbcb4ff0c31ca3d9628b7d25c73499a08d",
+        "U7": "b55316d334b76f27a318469292d36881fdeb3ed95201bd0c5945d5af114e2039",
+        "V7": "c1eb0302d7d6ea36bf577d52e5b16e65b07be81dca637fd71f4ab3ae7854aa29",
+        "W7": "118cd8220014f79ac905139e0a570efdaa96796713d9d0aaf98f22b842065ec7",
+        "Z7": "34d241464457c24cc6edcb5f14d8a46998de7e403f0683eacfe7241abb4389ae",
+        "U8": "ab53a6c7c4e4572697223866eb0e2c81f6c6d205728866000c6ba5fa7fb99bb6",
+        "V8": "1e9fdd7c6f0bc7ea582c4b0bdfa3bfc8e4f24df96e304199ea9c5b9c144aef27",
+        "W8": "19fc27dce5a6d8b339d71a7792adb77cce318c90345e6555e46298e0776ba20a",
+        "U9": "14be5b26ed5c23762a13ce31e442c207ff8e38642eae88de248d60fca9e32c8a",
+        "V9": "fc0b612ed3b310ac504fb4ca5bbecd7d5bbba90466053ef285f14fada23c8733",
+        "W9": "62d96a4094bb5f97e69e66fe33e4782a224f2c30a929bdfe62f2d1e743370b4b",
+        "U10": "e3ff52347885b4e0fd4a6dd4233797e509d5bea63578b14cabf50ef0152dce4b",
+        "V10": "1db7548cbb47090164dd63f896f4bc69486afa12e45a0044b3679a1d441c2367",
+        "W10": "e4b1bb2eb17f36338c43abef41be641067dd88b56a711656b9db54faa2dde057"
+      },
+      "events": [
+        {
+          "index": 1,
+          "leader": "W2",
+          "rho": 2,
+          "prefix": [
+            "U0",
+            "V0",
+            "W0",
+            "Z0",
+            "U1",
+            "V1",
+            "W1",
+            "W2"
+          ],
+          "slice": [
+            "U1",
+            "V1",
+            "W1",
+            "W2"
+          ]
+        },
+        {
+          "index": 2,
+          "leader": "W6",
+          "rho": 6,
+          "prefix": [
+            "U0",
+            "V0",
+            "W0",
+            "Z0",
+            "U1",
+            "V1",
+            "W1",
+            "U2",
+            "V2",
+            "W2",
+            "Z2",
+            "U3",
+            "V3",
+            "W3",
+            "Z3",
+            "V4",
+            "W4",
+            "Z4",
+            "U5",
+            "V5",
+            "W5",
+            "W6"
+          ],
+          "slice": [
+            "U2",
+            "V2",
+            "Z2",
+            "U3",
+            "V3",
+            "W3",
+            "Z3",
+            "V4",
+            "W4",
+            "Z4",
+            "U5",
+            "V5",
+            "W5",
+            "W6"
+          ]
+        },
+        {
+          "index": 3,
+          "leader": "U8",
+          "rho": 8,
+          "prefix": [
+            "U0",
+            "V0",
+            "W0",
+            "Z0",
+            "U1",
+            "V1",
+            "W1",
+            "U2",
+            "V2",
+            "W2",
+            "Z2",
+            "U3",
+            "V3",
+            "W3",
+            "Z3",
+            "U4",
+            "V4",
+            "W4",
+            "Z4",
+            "U5",
+            "V5",
+            "W5",
+            "Z5",
+            "U6",
+            "V6",
+            "W6",
+            "Z6",
+            "V7",
+            "W7",
+            "Z7",
+            "U8"
+          ],
+          "slice": [
+            "U4",
+            "Z5",
+            "U6",
+            "V6",
+            "Z6",
+            "V7",
+            "W7",
+            "Z7",
+            "U8"
+          ]
+        },
+        {
+          "index": 4,
+          "leader": "W10",
+          "rho": 10,
+          "prefix": [
+            "U0",
+            "V0",
+            "W0",
+            "Z0",
+            "U1",
+            "V1",
+            "W1",
+            "U2",
+            "V2",
+            "W2",
+            "Z2",
+            "U3",
+            "V3",
+            "W3",
+            "Z3",
+            "U4",
+            "V4",
+            "W4",
+            "Z4",
+            "U5",
+            "V5",
+            "W5",
+            "Z5",
+            "U6",
+            "V6",
+            "W6",
+            "Z6",
+            "V7",
+            "W7",
+            "Z7",
+            "U8",
+            "V8",
+            "W8",
+            "U9",
+            "V9",
+            "W9",
+            "W10"
+          ],
+          "slice": [
+            "V8",
+            "W8",
+            "U9",
+            "V9",
+            "W9",
+            "W10"
+          ]
+        }
+      ],
+      "target_slice_index": 2,
+      "horizon": 10,
+      "selected_event": 4,
+      "selected_prefix_digest": "1932808c5aabeb00a4bb31d36f20a9884eb47c2d16f82bf18eca5fb6d65aba3b",
+      "target_windows": {
+        "I_A": [
+          3,
+          4,
+          5,
+          6,
+          7
+        ],
+        "I_B": [
+          2,
+          3,
+          4,
+          5,
+          6
+        ],
+        "J": [
+          4,
+          5,
+          6,
+          7
+        ]
+      },
+      "observation_table": [
+        {
+          "round": 2,
+          "bits": {
+            "U": {
+              "present": true,
+              "A": false,
+              "B": false
+            },
+            "V": {
+              "present": true,
+              "A": false,
+              "B": false
+            },
+            "W": {
+              "present": true,
+              "A": false,
+              "B": false
+            },
+            "Z": {
+              "present": true,
+              "A": false,
+              "B": true
+            }
+          },
+          "C_A_cor": 0,
+          "C_B_cor": 0,
+          "D_cor": 0,
+          "C_A": 0,
+          "C_B": 1,
+          "Delta": -1
+        },
+        {
+          "round": 3,
+          "bits": {
+            "U": {
+              "present": true,
+              "A": false,
+              "B": false
+            },
+            "V": {
+              "present": true,
+              "A": true,
+              "B": false
+            },
+            "W": {
+              "present": true,
+              "A": false,
+              "B": false
+            },
+            "Z": {
+              "present": true,
+              "A": false,
+              "B": true
+            }
+          },
+          "C_A_cor": 1,
+          "C_B_cor": 0,
+          "D_cor": 1,
+          "C_A": 1,
+          "C_B": 1,
+          "Delta": 0
+        },
+        {
+          "round": 4,
+          "bits": {
+            "U": {
+              "present": true,
+              "A": true,
+              "B": false
+            },
+            "V": {
+              "present": true,
+              "A": true,
+              "B": false
+            },
+            "W": {
+              "present": true,
+              "A": true,
+              "B": false
+            },
+            "Z": {
+              "present": true,
+              "A": true,
+              "B": true
+            }
+          },
+          "C_A_cor": 3,
+          "C_B_cor": 0,
+          "D_cor": 3,
+          "C_A": 4,
+          "C_B": 1,
+          "Delta": 3
+        },
+        {
+          "round": 5,
+          "bits": {
+            "U": {
+              "present": true,
+              "A": true,
+              "B": true
+            },
+            "V": {
+              "present": true,
+              "A": true,
+              "B": true
+            },
+            "W": {
+              "present": true,
+              "A": true,
+              "B": true
+            },
+            "Z": {
+              "present": true,
+              "A": true,
+              "B": true
+            }
+          },
+          "C_A_cor": 3,
+          "C_B_cor": 3,
+          "D_cor": 0,
+          "C_A": 4,
+          "C_B": 4,
+          "Delta": 0
+        },
+        {
+          "round": 6,
+          "bits": {
+            "U": {
+              "present": true,
+              "A": true,
+              "B": true
+            },
+            "V": {
+              "present": true,
+              "A": true,
+              "B": true
+            },
+            "W": {
+              "present": true,
+              "A": true,
+              "B": true
+            },
+            "Z": {
+              "present": true,
+              "A": true,
+              "B": true
+            }
+          },
+          "C_A_cor": 3,
+          "C_B_cor": 3,
+          "D_cor": 0,
+          "C_A": 4,
+          "C_B": 4,
+          "Delta": 0
+        },
+        {
+          "round": 7,
+          "bits": {
+            "U": {
+              "present": false,
+              "A": false,
+              "B": false
+            },
+            "V": {
+              "present": true,
+              "A": true,
+              "B": true
+            },
+            "W": {
+              "present": true,
+              "A": true,
+              "B": true
+            },
+            "Z": {
+              "present": true,
+              "A": true,
+              "B": true
+            }
+          },
+          "C_A_cor": 2,
+          "C_B_cor": 2,
+          "D_cor": 0,
+          "C_A": 3,
+          "C_B": 3,
+          "Delta": 0
+        }
+      ],
+      "correct_only_eligibility_witnesses": {
+        "A": [
+          4,
+          5,
+          6
+        ],
+        "B": [
+          5,
+          6
+        ]
+      },
+      "all_target_slice_vertices_eligible": true,
+      "graph_edges": [
+        [
+          "U2",
+          "Z2"
+        ],
+        [
+          "U2",
+          "U3"
+        ],
+        [
+          "U2",
+          "V3"
+        ],
+        [
+          "U2",
+          "W3"
+        ],
+        [
+          "U2",
+          "Z3"
+        ],
+        [
+          "U2",
+          "V4"
+        ],
+        [
+          "U2",
+          "W4"
+        ],
+        [
+          "U2",
+          "Z4"
+        ],
+        [
+          "U2",
+          "U5"
+        ],
+        [
+          "U2",
+          "V5"
+        ],
+        [
+          "U2",
+          "W5"
+        ],
+        [
+          "U2",
+          "W6"
+        ],
+        [
+          "V2",
+          "Z2"
+        ],
+        [
+          "V2",
+          "U3"
+        ],
+        [
+          "V2",
+          "V3"
+        ],
+        [
+          "V2",
+          "W3"
+        ],
+        [
+          "V2",
+          "Z3"
+        ],
+        [
+          "V2",
+          "V4"
+        ],
+        [
+          "V2",
+          "W4"
+        ],
+        [
+          "V2",
+          "Z4"
+        ],
+        [
+          "V2",
+          "U5"
+        ],
+        [
+          "V2",
+          "V5"
+        ],
+        [
+          "V2",
+          "W5"
+        ],
+        [
+          "V2",
+          "W6"
+        ],
+        [
+          "Z2",
+          "Z3"
+        ],
+        [
+          "Z2",
+          "Z4"
+        ],
+        [
+          "Z2",
+          "U5"
+        ],
+        [
+          "Z2",
+          "V5"
+        ],
+        [
+          "Z2",
+          "W5"
+        ],
+        [
+          "Z2",
+          "W6"
+        ],
+        [
+          "U3",
+          "Z2"
+        ],
+        [
+          "U3",
+          "Z3"
+        ],
+        [
+          "U3",
+          "V4"
+        ],
+        [
+          "U3",
+          "W4"
+        ],
+        [
+          "U3",
+          "Z4"
+        ],
+        [
+          "U3",
+          "U5"
+        ],
+        [
+          "U3",
+          "V5"
+        ],
+        [
+          "U3",
+          "W5"
+        ],
+        [
+          "U3",
+          "W6"
+        ],
+        [
+          "V3",
+          "Z2"
+        ],
+        [
+          "V3",
+          "Z3"
+        ],
+        [
+          "V3",
+          "V4"
+        ],
+        [
+          "V3",
+          "W4"
+        ],
+        [
+          "V3",
+          "Z4"
+        ],
+        [
+          "V3",
+          "U5"
+        ],
+        [
+          "V3",
+          "V5"
+        ],
+        [
+          "V3",
+          "W5"
+        ],
+        [
+          "V3",
+          "W6"
+        ],
+        [
+          "W3",
+          "Z2"
+        ],
+        [
+          "W3",
+          "Z3"
+        ],
+        [
+          "W3",
+          "V4"
+        ],
+        [
+          "W3",
+          "W4"
+        ],
+        [
+          "W3",
+          "U5"
+        ],
+        [
+          "W3",
+          "V5"
+        ],
+        [
+          "W3",
+          "W5"
+        ],
+        [
+          "W3",
+          "W6"
+        ],
+        [
+          "Z3",
+          "Z4"
+        ],
+        [
+          "Z3",
+          "U5"
+        ],
+        [
+          "Z3",
+          "V5"
+        ],
+        [
+          "Z3",
+          "W5"
+        ],
+        [
+          "Z3",
+          "W6"
+        ],
+        [
+          "V4",
+          "U5"
+        ],
+        [
+          "V4",
+          "V5"
+        ],
+        [
+          "V4",
+          "W5"
+        ],
+        [
+          "V4",
+          "W6"
+        ],
+        [
+          "W4",
+          "U5"
+        ],
+        [
+          "W4",
+          "V5"
+        ],
+        [
+          "W4",
+          "W5"
+        ],
+        [
+          "W4",
+          "W6"
+        ],
+        [
+          "Z4",
+          "U5"
+        ],
+        [
+          "Z4",
+          "V5"
+        ],
+        [
+          "Z4",
+          "W5"
+        ],
+        [
+          "Z4",
+          "W6"
+        ],
+        [
+          "U5",
+          "W6"
+        ],
+        [
+          "V5",
+          "W6"
+        ],
+        [
+          "W5",
+          "W6"
+        ]
+      ],
+      "visibility_edges": [
+        {
+          "from": "U2",
+          "to": "Z2",
+          "margins": [
+            3,
+            3,
+            0,
+            0
+          ]
+        },
+        {
+          "from": "V2",
+          "to": "Z2",
+          "margins": [
+            2,
+            3,
+            0,
+            0
+          ]
+        },
+        {
+          "from": "V2",
+          "to": "Z3",
+          "margins": [
+            3,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "from": "U3",
+          "to": "Z2",
+          "margins": [
+            3,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "from": "U3",
+          "to": "Z3",
+          "margins": [
+            3,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "from": "V3",
+          "to": "Z2",
+          "margins": [
+            3,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "from": "V3",
+          "to": "Z3",
+          "margins": [
+            3,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "from": "W3",
+          "to": "Z2",
+          "margins": [
+            2,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "from": "W3",
+          "to": "Z3",
+          "margins": [
+            2,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "graph_edge_count": 76,
+      "causal_edge_count": 67,
+      "order_with_key_round_creator": [
+        "U2",
+        "V2",
+        "U3",
+        "V3",
+        "W3",
+        "Z2",
+        "Z3",
+        "V4",
+        "W4",
+        "Z4",
+        "U5",
+        "V5",
+        "W5",
+        "W6"
+      ],
+      "causal_only_order_with_same_key": [
+        "U2",
+        "V2",
+        "Z2",
+        "U3",
+        "V3",
+        "W3",
+        "Z3",
+        "V4",
+        "W4",
+        "Z4",
+        "U5",
+        "V5",
+        "W5",
+        "W6"
+      ]
+    }
+  ]
+}

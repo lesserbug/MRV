@@ -91,7 +91,7 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
     // Make the data store.
     let store = Store::new(store_path).context("Failed to create a store")?;
 
-    // Build two pipelines: Consensus -> MRV -> analyze.
+    // Both benchmark traversals use the same exporter and analyze endpoint.
     let (tx_consensus_to_mrv, rx_consensus_to_mrv) = channel(CHANNEL_CAPACITY);
     let (tx_mrv_to_client, rx_mrv_to_client) = channel(CHANNEL_CAPACITY);
 
@@ -107,7 +107,7 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
                 keypair,
                 committee.clone(),
                 parameters.clone(),
-                store,
+                store.clone(),
                 /* tx_consensus */ tx_new_certificates,
                 /* rx_consensus */ rx_feedback,
             );
@@ -116,19 +116,39 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
             Consensus::spawn(
                 committee,
                 parameters.gc_depth,
+                store,
                 /* rx_primary */ rx_new_certificates,
                 /* tx_primary */ tx_feedback,
                 /* tx_output */ tx_consensus_to_mrv,
             );
 
-            // Start MRV as a middle executor layer.
-            info!("Node started with MRV executor attached");
-            MrvExecutor::spawn(
-                rx_consensus_to_mrv,
-                tx_mrv_to_client,
-                committee_size,
-                parameters.mrv_window,
-            );
+            let tusk_traversal = cfg!(feature = "benchmark")
+                && std::env::var("MRV_BENCH_TUSK_TRAVERSAL").as_deref() == Ok("1");
+            if tusk_traversal {
+                info!("Node started with benchmark exporter/Tusk traversal");
+                tokio::spawn(async move {
+                    let mut input = rx_consensus_to_mrv;
+                    while let Some(slice) = input.recv().await {
+                        let started = std::time::Instant::now();
+                        let certificates = slice.certificates.len();
+                        for certificate in slice.certificates {
+                            if tx_mrv_to_client.send(certificate).await.is_err() {
+                                return;
+                            }
+                        }
+                        info!("Tusk_TraversalStats slice_id={} certificates={} pass_us={}",
+                            slice.batch_index, certificates, started.elapsed().as_micros());
+                    }
+                });
+            } else {
+                info!("Node started with MRV executor attached");
+                MrvExecutor::spawn(
+                    rx_consensus_to_mrv,
+                    tx_mrv_to_client,
+                    committee_size,
+                    parameters.mrv_window,
+                );
+            }
         }
 
         // Spawn a single worker.

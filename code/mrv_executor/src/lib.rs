@@ -51,6 +51,8 @@ struct SealedSlice {
     order: Vec<Digest>,
     #[cfg(feature = "benchmark")]
     metrics: SealedMetrics,
+    #[cfg(feature = "benchmark")]
+    sealed_at: Instant,
 }
 
 struct SliceOrdering {
@@ -274,6 +276,8 @@ impl MrvExecutor {
         // event before sealing so every decision uses exactly one prefix P_k.
         // Evidence processing follows nondecreasing rounds, while `members`
         // retains the exporter sequence unchanged as the base execution order.
+        #[cfg(feature = "benchmark")]
+        let evidence_started = Instant::now();
         certificates.sort_by_key(Certificate::round);
         for certificate in certificates {
             let digest = certificate.digest();
@@ -288,6 +292,8 @@ impl MrvExecutor {
             }
             self.update_seen_for_new_certificate(round, author, &digest);
         }
+        #[cfg(feature = "benchmark")]
+        let evidence_us = evidence_started.elapsed().as_micros();
 
         let seal_horizon = max_round.saturating_add(self.mrv_window);
         #[cfg(feature = "benchmark")]
@@ -316,13 +322,32 @@ impl MrvExecutor {
         );
         debug_assert!(previous.is_none(), "slice ids must be unique");
 
+        #[cfg(feature = "benchmark")]
+        let seal_started = Instant::now();
         let sealed_any = self.seal_ready_slices(slice_id);
+        #[cfg(feature = "benchmark")]
+        let seal_us = seal_started.elapsed().as_micros();
+        #[cfg(feature = "benchmark")]
+        let release_started = Instant::now();
         self.release_ready_slices().await?;
+        #[cfg(feature = "benchmark")]
+        let release_us = release_started.elapsed().as_micros();
+        #[cfg(feature = "benchmark")]
+        let gc_started = Instant::now();
         if sealed_any {
             self.garbage_collect_store();
             #[cfg(feature = "benchmark")]
             self.assert_member_lifecycle();
         }
+        #[cfg(feature = "benchmark")]
+        info!("MRV_Runtime slice_id={} evidence_us={} seal_us={} release_us={} gc_us={} event_us={} active_targets={} unsealed_slices={} queued_output_slices={} queued_output_vertices={} cached_certificates={} benchmark_history_members={}",
+            slice_id, evidence_us, seal_us, release_us, gc_started.elapsed().as_micros(),
+            registered_at.elapsed().as_micros(), self.auf_states.len(),
+            self.slices.values().filter(|slice| slice.sealed.is_none()).count(),
+            self.slices.values().filter(|slice| slice.sealed.is_some()).count(),
+            self.slices.values().filter_map(|slice| slice.sealed.as_ref())
+                .map(|sealed| sealed.order.len()).sum::<usize>(),
+            self.store.len(), self.seen_slice_members.len());
         Ok(())
     }
 
@@ -393,6 +418,8 @@ impl MrvExecutor {
         let sealed_any = !ready.is_empty();
 
         for slice_id in ready {
+            #[cfg(feature = "benchmark")]
+            let sealing_started = Instant::now();
             let members = self
                 .slices
                 .get(&slice_id)
@@ -400,7 +427,13 @@ impl MrvExecutor {
                 .members
                 .clone();
 
+            #[cfg(feature = "benchmark")]
+            let snapshot_ready_age_us = self.slices[&slice_id].registered_at.elapsed().as_micros();
+            #[cfg(feature = "benchmark")]
+            let ordering_started = Instant::now();
             let ordering = self.order_slice(&members);
+            #[cfg(feature = "benchmark")]
+            let ordering_us = ordering_started.elapsed().as_micros();
             #[cfg(feature = "benchmark")]
             let execution_order_digest =
                 fingerprint_digests(b"MRV-EXECUTION-ORDER-v1", &ordering.order);
@@ -422,6 +455,8 @@ impl MrvExecutor {
                         .elapsed()
                         .as_millis(),
                 },
+                #[cfg(feature = "benchmark")]
+                sealed_at: Instant::now(),
             };
 
             let slice = self
@@ -436,6 +471,9 @@ impl MrvExecutor {
             self.release_evidence(&members);
             #[cfg(feature = "benchmark")]
             self.assert_member_lifecycle();
+            #[cfg(feature = "benchmark")]
+            info!("MRV_SliceTiming slice_id={} snapshot_ready_age_us={} ordering_us={} sealing_us={}",
+                slice_id, snapshot_ready_age_us, ordering_us, sealing_started.elapsed().as_micros());
 
             #[cfg(feature = "benchmark")]
             {
@@ -478,6 +516,8 @@ impl MrvExecutor {
                 slice.seal_horizon,
             );
 
+            #[cfg(feature = "benchmark")]
+            let output_started = Instant::now();
             for digest in &sealed.order {
                 let certificate = self
                     .store
@@ -486,6 +526,9 @@ impl MrvExecutor {
                     .expect("sealed slice member must remain in the committed store");
                 self.tx_output.send(certificate).await.map_err(|_| ())?;
             }
+            #[cfg(feature = "benchmark")]
+            info!("MRV_ReleaseTiming slice_id={} post_seal_to_release_us={} output_send_us={}",
+                slice_id, sealed.sealed_at.elapsed().as_micros(), output_started.elapsed().as_micros());
 
             #[cfg(feature = "benchmark")]
             info!(
@@ -1671,9 +1714,24 @@ mod tests {
     }
 
     #[cfg(feature = "benchmark")]
+    async fn certificate_store(certificates: &[Certificate]) -> store::Store {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../target/exporter-tests-20261008")
+            .join(format!("mrv-{}", rand::random::<u64>()));
+        std::fs::create_dir_all(&path).unwrap();
+        let mut store = store::Store::new(path.to_str().unwrap()).unwrap();
+        for certificate in certificates {
+            store.write(certificate.digest().to_vec(), bincode::serialize(certificate).unwrap()).await;
+        }
+        store
+    }
+
+    #[cfg(feature = "benchmark")]
     async fn run_tusk_and_mrv(
         committee: Committee,
         certificates: Vec<Certificate>,
+        gc_depth: Round,
+        store: store::Store,
     ) -> (Vec<CommittedSubDag>, Vec<Digest>) {
         let committee_size = committee.size();
         let (tx_consensus, rx_consensus) = channel(128);
@@ -1681,7 +1739,8 @@ mod tests {
         let (tx_tusk_output, mut rx_tusk_output) = channel(16);
         Consensus::spawn(
             committee,
-            /* gc_depth */ 50,
+            gc_depth,
+            store,
             rx_consensus,
             tx_primary,
             tx_tusk_output,
@@ -1696,7 +1755,7 @@ mod tests {
             tusk_slices.push(slice);
         }
 
-        // The unmodified Tusk output objects are the direct production inputs
+        // The shared Tusk exporter output objects are the direct production inputs
         // to MRV; the clone below only preserves them for test inspection.
         let (tx_mrv_input, rx_mrv_input) = channel(16);
         let (tx_mrv_output, mut rx_mrv_output) = channel(128);
@@ -1712,6 +1771,39 @@ mod tests {
         }
 
         (tusk_slices, mrv_order)
+    }
+
+    #[cfg(feature = "benchmark")]
+    fn causal_key_order(slices: &[CommittedSubDag]) -> Vec<Digest> {
+        let (mut executor, _) = test_executor(4, 4);
+        let mut order = Vec::new();
+        for slice in slices {
+            for certificate in &slice.certificates {
+                executor.store.insert(certificate.digest(), certificate.clone());
+            }
+            let mut nodes: Vec<_> = slice.certificates.iter().map(Certificate::digest).collect();
+            nodes.sort_by(|a, b| executor.tie_break(a, b));
+            let ranks: HashMap<_, _> = nodes.iter().cloned().enumerate()
+                .map(|(rank, digest)| (digest, rank)).collect();
+            let mut outgoing: HashMap<_, Vec<_>> = nodes.iter().cloned()
+                .map(|digest| (digest, Vec::new())).collect();
+            for i in 0..nodes.len() {
+                for j in i + 1..nodes.len() {
+                    if let Some((from, to)) = executor.causal_edge(&nodes[i], &nodes[j]) {
+                        outgoing.get_mut(&from).unwrap().push(to);
+                    }
+                }
+            }
+            let slice_order = executor.topological_sort_causal_component(&nodes, &outgoing, &ranks);
+            let positions: HashMap<_, _> = slice_order.iter().cloned().enumerate()
+                .map(|(position, digest)| (digest, position)).collect();
+            for (from, tos) in outgoing {
+                for to in tos { assert!(positions[&from] < positions[&to]); }
+            }
+            assert_eq!(slice_order.len(), slice.certificates.len());
+            order.extend(slice_order);
+        }
+        order
     }
 
     #[cfg(feature = "benchmark")]
@@ -1860,10 +1952,72 @@ mod tests {
     }
 
     #[cfg(feature = "benchmark")]
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    struct ControlledRoundFourAbMargin {
+        total_delta: i64,
+        correct_delta: i64,
+        byzantine_delta: i64,
+    }
+
+    #[cfg(feature = "benchmark")]
     struct ControlledPairMeasurement {
         verdict: PairVerdict,
         component_relation: TargetComponentRelation,
+        nontrivial_scc_count: usize,
         b_to_a_crossing: Option<ControlledCrossingDecomposition>,
+        round_four_ab_margin: ControlledRoundFourAbMargin,
+    }
+
+    #[cfg(feature = "benchmark")]
+    fn controlled_round_four_ab_margin(
+        executor: &MrvExecutor,
+        target_a: &Digest,
+        target_b: &Digest,
+    ) -> ControlledRoundFourAbMargin {
+        const ROUND_FOUR: Round = 4;
+
+        let state_a = executor
+            .auf_states
+            .get(target_a)
+            .expect("controlled target A must have visibility state");
+        let state_b = executor
+            .auf_states
+            .get(target_b)
+            .expect("controlled target B must have visibility state");
+        let seen_a = state_a.seen_by_round.get(&ROUND_FOUR);
+        let seen_b = state_b.seen_by_round.get(&ROUND_FOUR);
+        let byzantine_creator = public_key(4);
+        let mut correct_delta = 0i64;
+        let mut byzantine_delta = 0i64;
+
+        for creator in [1u8, 2, 3, 4].iter().map(|creator| public_key(*creator)) {
+            let sees_a = seen_a.map_or(false, |creators| creators.contains(&creator));
+            let sees_b = seen_b.map_or(false, |creators| creators.contains(&creator));
+            let contribution = match (sees_a, sees_b) {
+                (true, false) => 1,
+                (false, true) => -1,
+                (true, true) | (false, false) => 0,
+            };
+            if creator == byzantine_creator {
+                byzantine_delta += contribution;
+            } else {
+                correct_delta += contribution;
+            }
+        }
+
+        let total_delta = executor.seen_count_at(target_a, ROUND_FOUR) as i64
+            - executor.seen_count_at(target_b, ROUND_FOUR) as i64;
+        assert_eq!(
+            total_delta,
+            correct_delta + byzantine_delta,
+            "controlled round-4 A-B margin must decompose by creator role"
+        );
+
+        ControlledRoundFourAbMargin {
+            total_delta,
+            correct_delta,
+            byzantine_delta,
+        }
     }
 
     #[cfg(feature = "benchmark")]
@@ -2068,7 +2222,10 @@ mod tests {
         ControlledPairMeasurement {
             verdict,
             component_relation,
+            nontrivial_scc_count: linearization.ordered_sccs.iter()
+                .filter(|component| component.len() > 1).count(),
             b_to_a_crossing: controlled_b_to_a_crossing(&executor, target_a, target_b),
+            round_four_ab_margin: controlled_round_four_ab_margin(&executor, target_a, target_b),
         }
     }
 
@@ -2077,6 +2234,7 @@ mod tests {
     struct AdversarialStructureStats {
         snapshot_visible_directly_affected_correct_proposers: Option<usize>,
         snapshot_visible_correct_round_four_proposer_count: Option<usize>,
+        round_four_ab_margin: Option<ControlledRoundFourAbMargin>,
         edge_preserved_count: usize,
         edge_suppressed_no_signal_count: usize,
         edge_suppressed_conflict_count: usize,
@@ -2088,6 +2246,9 @@ mod tests {
         tusk_attack_order_count: usize,
         tusk_attack_induced_reversal_count: usize,
         tusk_attack_removed_reversal_count: usize,
+        causal_key_reference_attack_order_count: usize,
+        causal_key_attack_order_count: usize,
+        nontrivial_scc_count: usize,
         mrv_attack_order_count: usize,
         mrv_attack_order_without_reverse_edge_count: usize,
         mrv_attack_order_without_reverse_edge_indirect_path_count: usize,
@@ -2360,6 +2521,8 @@ mod tests {
         let mut tusk_opposed_count = 0;
         let mut mrv_override_count = 0;
         let mut key_opposed_count = 0;
+        let mut causal_key_favored_first_count = 0;
+        let mut nontrivial_scc_count = 0;
 
         for seed in 0..TRIALS {
             let mut rng = StdRng::seed_from_u64(seed);
@@ -2477,6 +2640,7 @@ mod tests {
             Consensus::spawn(
                 committee,
                 /* gc_depth */ 50,
+                certificate_store(&certificates).await,
                 rx_consensus,
                 tx_primary,
                 tx_tusk_output,
@@ -2505,6 +2669,12 @@ mod tests {
                 "targets must occur together in exactly one Tusk slice: seed={seed}"
             );
             let target_slice = target_slice[0];
+            let causal_order = causal_key_order(&tusk_slices);
+            causal_key_favored_first_count += usize::from(
+                causal_order.iter().position(|digest| digest == favored).unwrap()
+                    < causal_order.iter().position(|digest| digest == other).unwrap());
+            nontrivial_scc_count += controlled_pair_measurement(
+                &tusk_slices, &target_a, &target_b).nontrivial_scc_count;
             let tusk_favored_position = target_slice
                 .certificates
                 .iter()
@@ -2565,6 +2735,9 @@ mod tests {
             mrv_override_count,
             key_opposed_count,
         );
+        println!("MRV_CausalKeyComparison scenario=one_sided trials={} committed_same_slice_and_output_count={} tusk_favored_first={} causal_key_favored_first={} mrv_favored_first={} nontrivial_scc_count={}",
+            TRIALS, TRIALS, tusk_favored_first_count, causal_key_favored_first_count,
+            mrv_favored_first_count, nontrivial_scc_count);
     }
 
     #[cfg(feature = "benchmark")]
@@ -2573,6 +2746,7 @@ mod tests {
         const TRIALS: u64 = 100;
 
         let mut reference_edge_count = 0;
+        let mut reference_round_four_ab_margin: Option<ControlledRoundFourAbMargin> = None;
         let mut stats: Vec<AdversarialStructureStats> = (0..=3)
             .map(|_| AdversarialStructureStats::default())
             .collect();
@@ -2598,9 +2772,12 @@ mod tests {
             );
 
             let (reference_slices, reference_mrv_order) =
-                run_tusk_and_mrv(reference_committee, reference_certificates.clone()).await;
+                run_tusk_and_mrv(reference_committee, reference_certificates.clone(), 50,
+                    certificate_store(&reference_certificates).await).await;
             let reference_tusk_attack_order =
                 target_b_before_a_in_tusk(&reference_slices, &reference_a, &reference_b);
+            let reference_causal_key_attack_order = target_b_before_a_in_mrv(
+                &causal_key_order(&reference_slices), &reference_a, &reference_b);
             let reference_mrv_attack_order =
                 target_b_before_a_in_mrv(&reference_mrv_order, &reference_a, &reference_b);
             assert!(
@@ -2615,6 +2792,16 @@ mod tests {
                 PairVerdict::EdgeAToB,
                 "reference must produce the predeclared A -> B edge: seed={seed}"
             );
+            match reference_round_four_ab_margin {
+                Some(previous) => assert_eq!(
+                    previous, reference_measurement.round_four_ab_margin,
+                    "reference round-4 A-B margin must be stable across seeds"
+                ),
+                None => {
+                    reference_round_four_ab_margin =
+                        Some(reference_measurement.round_four_ab_margin)
+                }
+            }
             reference_edge_count += 1;
 
             for directly_affected_correct_proposers in 0..=3 {
@@ -2689,11 +2876,14 @@ mod tests {
                     "scheduler must affect exactly h correct proposers"
                 );
 
+                let store = certificate_store(&attack_certificates).await;
                 let (tusk_slices, mrv_order) =
-                    run_tusk_and_mrv(attack_committee, attack_certificates).await;
+                    run_tusk_and_mrv(attack_committee, attack_certificates, 50, store).await;
                 let tusk_attack_order =
                     target_b_before_a_in_tusk(&tusk_slices, &target_a, &target_b);
                 let mrv_attack_order = target_b_before_a_in_mrv(&mrv_order, &target_a, &target_b);
+                let causal_key_attack_order = target_b_before_a_in_mrv(
+                    &causal_key_order(&tusk_slices), &target_a, &target_b);
                 let snapshot_slice_index =
                     controlled_snapshot_slice_index(&tusk_slices, &target_a, &target_b);
                 let directly_affected: HashSet<PublicKey> = CONTROLLED_SCHEDULER_ORDER
@@ -2731,6 +2921,7 @@ mod tests {
                 let measurement = controlled_pair_measurement(&tusk_slices, &target_a, &target_b);
                 let component_relation = measurement.component_relation;
                 let b_to_a_crossing = measurement.b_to_a_crossing;
+                let round_four_ab_margin = measurement.round_four_ab_margin;
                 let verdict = measurement.verdict;
                 let reverse_edge = matches!(&verdict, PairVerdict::EdgeBToA);
                 let stats = &mut stats[directly_affected_correct_proposers];
@@ -2754,6 +2945,13 @@ mod tests {
                             Some(snapshot_visible_correct_round_four_proposer_count)
                     }
                 }
+                match stats.round_four_ab_margin {
+                    Some(previous) => assert_eq!(
+                        previous, round_four_ab_margin,
+                        "round-4 A-B margin must be stable within one h condition"
+                    ),
+                    None => stats.round_four_ab_margin = Some(round_four_ab_margin),
+                }
 
                 match verdict {
                     PairVerdict::EdgeAToB => stats.edge_preserved_count += 1,
@@ -2764,6 +2962,14 @@ mod tests {
                 }
                 if let Some(crossing) = b_to_a_crossing {
                     stats.crossing_count += 1;
+                    if crossing.crossing_round == 4 {
+                        assert_eq!(round_four_ab_margin.total_delta, -crossing.total_delta);
+                        assert_eq!(round_four_ab_margin.correct_delta, -crossing.correct_delta);
+                        assert_eq!(
+                            round_four_ab_margin.byzantine_delta,
+                            -crossing.byzantine_delta
+                        );
+                    }
                     match stats.crossing_decomposition {
                         Some(previous) => assert_eq!(
                             previous, crossing,
@@ -2779,6 +2985,9 @@ mod tests {
                 if reference_tusk_attack_order {
                     stats.tusk_reference_attack_order_count += 1;
                 }
+                stats.causal_key_reference_attack_order_count += usize::from(reference_causal_key_attack_order);
+                stats.causal_key_attack_order_count += usize::from(causal_key_attack_order);
+                stats.nontrivial_scc_count += measurement.nontrivial_scc_count;
                 if tusk_attack_order {
                     stats.tusk_attack_order_count += 1;
                 }
@@ -2814,7 +3023,48 @@ mod tests {
         }
 
         assert_eq!(reference_edge_count, TRIALS as usize);
+        let reference_round_four_ab_margin = reference_round_four_ab_margin
+            .expect("reference condition must record its round-4 A-B margin");
+        assert_eq!(
+            reference_round_four_ab_margin,
+            ControlledRoundFourAbMargin {
+                total_delta: 2,
+                correct_delta: 1,
+                byzantine_delta: 1,
+            },
+            "reference construction must be threshold-tight at round 4"
+        );
+        let expected_attack_round_four_ab_margins = [
+            ControlledRoundFourAbMargin {
+                total_delta: 1,
+                correct_delta: 1,
+                byzantine_delta: 0,
+            },
+            ControlledRoundFourAbMargin {
+                total_delta: -1,
+                correct_delta: -1,
+                byzantine_delta: 0,
+            },
+            ControlledRoundFourAbMargin {
+                total_delta: -2,
+                correct_delta: -2,
+                byzantine_delta: 0,
+            },
+            ControlledRoundFourAbMargin {
+                total_delta: -2,
+                correct_delta: -2,
+                byzantine_delta: 0,
+            },
+        ];
         for (directly_affected_correct_proposers, stats) in stats.iter().enumerate() {
+            let round_four_ab_margin = stats
+                .round_four_ab_margin
+                .expect("every h condition must record its round-4 A-B margin");
+            assert_eq!(
+                round_four_ab_margin,
+                expected_attack_round_four_ab_margins[directly_affected_correct_proposers],
+                "controlled round-4 A-B margin trajectory must match the constructed parent availability"
+            );
             assert_eq!(
                 TRIALS as usize,
                 stats.edge_preserved_count
@@ -2876,7 +3126,7 @@ mod tests {
                 .unwrap_or_else(|| "none".to_string());
 
             println!(
-                "MRV_AdversarialStructureStats directly_affected_correct_proposers={} snapshot_visible_directly_affected_correct_proposers={} snapshot_visible_correct_round_four_proposer_count={} trials={} reference_edge_count={} edge_preserved_count={} edge_suppressed_no_signal_count={} edge_suppressed_conflict_count={} edge_reversed_count={} ineligible_count={} crossing_count={} crossing_round={} total_delta={} correct_delta={} byzantine_delta={} a_only_creator_count={} b_only_creator_count={} both_creator_count={} neither_creator_count={} tusk_reference_attack_order_count={} tusk_attack_order_count={} tusk_attack_induced_reversal_count={} tusk_attack_removed_reversal_count={} mrv_attack_order_count={} mrv_attack_order_without_reverse_edge_count={} mrv_attack_order_without_reverse_edge_indirect_path_count={} mrv_attack_order_without_reverse_edge_same_scc_count={} mrv_attack_order_without_reverse_edge_incomparable_components_count={}",
+                "MRV_AdversarialStructureStats directly_affected_correct_proposers={} snapshot_visible_directly_affected_correct_proposers={} snapshot_visible_correct_round_four_proposer_count={} trials={} reference_edge_count={} reference_round_four_ab_delta={} reference_round_four_correct_ab_delta={} reference_round_four_byzantine_ab_delta={} round_four_ab_delta={} round_four_correct_ab_delta={} round_four_byzantine_ab_delta={} edge_preserved_count={} edge_suppressed_no_signal_count={} edge_suppressed_conflict_count={} edge_reversed_count={} ineligible_count={} crossing_count={} crossing_round={} total_delta={} correct_delta={} byzantine_delta={} a_only_creator_count={} b_only_creator_count={} both_creator_count={} neither_creator_count={} tusk_reference_attack_order_count={} tusk_attack_order_count={} tusk_attack_induced_reversal_count={} tusk_attack_removed_reversal_count={} mrv_attack_order_count={} mrv_attack_order_without_reverse_edge_count={} mrv_attack_order_without_reverse_edge_indirect_path_count={} mrv_attack_order_without_reverse_edge_same_scc_count={} mrv_attack_order_without_reverse_edge_incomparable_components_count={}",
                 directly_affected_correct_proposers,
                 stats
                     .snapshot_visible_directly_affected_correct_proposers
@@ -2886,6 +3136,12 @@ mod tests {
                     .expect("every h condition must record the round-4 correct denominator"),
                 TRIALS,
                 reference_edge_count,
+                reference_round_four_ab_margin.total_delta,
+                reference_round_four_ab_margin.correct_delta,
+                reference_round_four_ab_margin.byzantine_delta,
+                round_four_ab_margin.total_delta,
+                round_four_ab_margin.correct_delta,
+                round_four_ab_margin.byzantine_delta,
                 stats.edge_preserved_count,
                 stats.edge_suppressed_no_signal_count,
                 stats.edge_suppressed_conflict_count,
@@ -2910,6 +3166,468 @@ mod tests {
                 stats.mrv_attack_order_without_reverse_edge_same_scc_count,
                 stats.mrv_attack_order_without_reverse_edge_incomparable_components_count,
             );
+            println!("MRV_CausalKeyComparison scenario=parent_availability condition={} trials={} committed_same_slice_and_output_count={} tusk_reference_b_before_a={} causal_key_reference_b_before_a={} tusk_b_before_a={} causal_key_b_before_a={} mrv_b_before_a={} nontrivial_scc_count={}",
+                directly_affected_correct_proposers, TRIALS, TRIALS,
+                stats.tusk_reference_attack_order_count, stats.causal_key_reference_attack_order_count,
+                stats.tusk_attack_order_count, stats.causal_key_attack_order_count,
+                stats.mrv_attack_order_count, stats.nontrivial_scc_count);
+        }
+    }
+
+    #[cfg(feature = "benchmark")]
+    #[tokio::test]
+    async fn controlled_quorum_evidence_scc_experiment() {
+        for seed in 0..2 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let mut keys: Vec<_> = (0..7).map(|_| crypto::generate_keypair(&mut rng)).collect();
+            keys.sort_by_key(|(name, _)| *name);
+            let names: Vec<_> = keys.iter().map(|(name, _)| *name).collect();
+            let committee = Committee { authorities: names.iter().map(|name| (*name, Authority {
+                stake: 1,
+                primary: PrimaryAddresses {
+                    primary_to_primary: "127.0.0.1:0".parse().unwrap(),
+                    worker_to_primary: "127.0.0.1:0".parse().unwrap(),
+                },
+                workers: HashMap::new(),
+            })).collect() };
+            let mut previous: Vec<_> = Certificate::genesis(&committee).iter()
+                .map(Certificate::digest).collect();
+            let mut certificates = Vec::new();
+            for round in 1..=17 {
+                let mut next = Vec::new();
+                for (name, secret) in &keys {
+                    let mut parents = previous.clone();
+                    if round > 1 {
+                        parents.shuffle(&mut rng);
+                        parents.truncate(committee.quorum_threshold() as usize);
+                    }
+                    let mut header = Header { author: *name, round,
+                        parents: parents.into_iter().collect(), ..Header::default() };
+                    header.id = header.digest();
+                    header.signature = crypto::Signature::new(&header.id, secret);
+                    let mut certificate = Certificate { header, ..Certificate::default() };
+                    certificate.votes = keys.iter().map(|(voter, secret)|
+                        (*voter, crypto::Signature::new(&certificate.digest(), secret))).collect();
+                    certificate.verify(&committee).unwrap();
+                    next.push(certificate.digest());
+                    certificates.push(certificate);
+                }
+                previous = next;
+            }
+            assert_valid_quorum_parent_dag(&committee, &certificates);
+            let (slices, production_order) = run_tusk_and_mrv(committee,
+                certificates.clone(), 50, certificate_store(&certificates).await).await;
+            let causal_order = causal_key_order(&slices);
+            let (mut executor, _) = test_executor(7, 4);
+            let mut pending = BTreeMap::new();
+            let mut expected_order = Vec::new();
+            let mut checked_slices = 0;
+            let mut causal_edges = 0;
+            let mut visibility_edges = 0;
+            for slice in &slices {
+                let mut incoming = slice.certificates.clone();
+                incoming.sort_by_key(Certificate::round);
+                for certificate in incoming {
+                    let digest = certificate.digest();
+                    let round = certificate.round();
+                    let author = certificate.origin();
+                    executor.frontier_round = executor.frontier_round.max(round);
+                    executor.store.insert(digest.clone(), certificate);
+                    executor.note_active_round(round);
+                    executor.auf_states.insert(digest.clone(), AufState::new(round));
+                    executor.update_seen_for_new_certificate(round, author, &digest);
+                }
+                pending.insert(slice.batch_index, slice);
+                let ready: Vec<_> = pending.iter().filter_map(|(id, slice)| {
+                    let max_round = slice.certificates.iter().map(Certificate::round).max().unwrap();
+                    (executor.frontier_round >= max_round + 4).then_some(*id)
+                }).collect();
+                for id in ready {
+                    let slice = pending.remove(&id).unwrap();
+                    let members: Vec<_> = slice.certificates.iter().map(Certificate::digest).collect();
+                    // Once theta creators see X at t, every t+1 quorum meets
+                    // that set. Use this evidence potential only to check the
+                    // derived graph; it does not replace MRV's completion key.
+                    let potential: HashMap<_, _> = members.iter().map(|digest| {
+                        let state = &executor.auf_states[digest];
+                        let first = state.seen_by_round.iter()
+                            .filter(|(_, creators)| creators.len() as i64 >= executor.delta_threshold)
+                            .min_by_key(|(round, _)| **round);
+                        let (round, count) = first.map_or((Round::MAX, 0),
+                            |(round, creators)| (*round, creators.len()));
+                        (digest.clone(), (round, Reverse(count), state.round))
+                    }).collect();
+                    let ordering = executor.order_slice(&members);
+                    let positions: HashMap<_, _> = ordering.order.iter().cloned().enumerate()
+                        .map(|(position, digest)| (digest, position)).collect();
+                    for i in 0..members.len() {
+                        for j in i + 1..members.len() {
+                            let a = &members[i];
+                            let b = &members[j];
+                            let edge = if let Some(edge) = executor.causal_edge(a, b) {
+                                causal_edges += 1;
+                                Some(edge)
+                            } else {
+                                match executor.compare_incomparable_pair(a, b,
+                                    executor.is_eligible(a), executor.is_eligible(b)) {
+                                    PairVerdict::EdgeAToB => { visibility_edges += 1; Some((a.clone(), b.clone())) }
+                                    PairVerdict::EdgeBToA => { visibility_edges += 1; Some((b.clone(), a.clone())) }
+                                    PairVerdict::Conflict => panic!("unexpected quorum-evidence conflict: seed={seed}"),
+                                    PairVerdict::Ineligible | PairVerdict::NoSignal => None,
+                                }
+                            };
+                            if let Some((from, to)) = edge {
+                                assert!(potential[&from] < potential[&to],
+                                    "derived edge must increase evidence potential: seed={seed}");
+                                assert!(positions[&from] < positions[&to]);
+                            }
+                        }
+                    }
+                    assert_eq!(ordering.metrics.nontrivial_scc_count, 0);
+                    expected_order.extend(ordering.order);
+                    checked_slices += 1;
+                }
+            }
+            assert_eq!(expected_order, production_order);
+            assert!(!production_order.is_empty());
+            assert_eq!(production_order.iter().cloned().collect::<HashSet<_>>(),
+                causal_order.iter().take(production_order.len()).cloned().collect());
+            println!("MRV_QuorumEvidenceScc seed={} n=7 quorum=5 theta=3 exported_slices={} checked_sealed_slices={} output_vertices={} causal_edges={} visibility_edges={} nontrivial_scc_count=0 final_order_constraints_satisfied=true",
+                seed, slices.len(), checked_slices, production_order.len(), causal_edges, visibility_edges);
+        }
+    }
+
+    #[cfg(feature = "benchmark")]
+    #[tokio::test]
+    async fn exporter_ancestry_reference_probe() {
+        // Reuse both historical omission fixtures. Full history is metadata
+        // only: contributors remain exactly the repaired exporter's vertices.
+        for missing_round in [1, 3] {
+            let mut rng = StdRng::seed_from_u64(0);
+            let mut keys: Vec<_> = (0..4).map(|_| crypto::generate_keypair(&mut rng)).collect();
+            keys.sort_by_key(|(name, _)| *name);
+            let committee = Committee {
+                authorities: keys.iter().map(|(name, _)| (*name, Authority {
+                    stake: 1,
+                    primary: PrimaryAddresses {
+                        primary_to_primary: "127.0.0.1:0".parse().unwrap(),
+                        worker_to_primary: "127.0.0.1:0".parse().unwrap(),
+                    },
+                    workers: HashMap::new(),
+                })).collect(),
+            };
+            let genesis = Certificate::genesis(&committee);
+            let mut history: HashMap<_, _> = genesis.iter()
+                .map(|certificate| (certificate.digest(), certificate.clone())).collect();
+            let mut previous: Vec<_> = keys.iter().map(|(name, _)| genesis.iter()
+                .find(|certificate| certificate.origin() == *name).unwrap().digest()).collect();
+            let mut certificates = Vec::new();
+            let mut omitted = None;
+            let mut target = None;
+            for round in 1..=15 {
+                let mut next = Vec::new();
+                for (creator, (name, secret)) in keys.iter().enumerate() {
+                    let excluded = match (missing_round, round, creator) {
+                        (1, 2, 2) => Some(2),
+                        (3, 3, 2 | 3) => Some(2),
+                        (3, 4, 0) => Some(0),
+                        (3, 4, _) => Some(1),
+                        (_, 1, _) => None, // Proposer starts with all genesis parents.
+                        _ => Some(3), // Exactly the first quorum, rather than all four parents.
+                    };
+                    let mut header = Header {
+                        author: *name,
+                        round,
+                        parents: previous.iter().enumerate()
+                            .filter(|(index, _)| Some(*index) != excluded)
+                            .map(|(_, digest)| digest.clone()).collect(),
+                        ..Header::default()
+                    };
+                    header.id = header.digest();
+                    header.signature = crypto::Signature::new(&header.id, secret);
+                    let mut certificate = Certificate { header, ..Certificate::default() };
+                    certificate.votes = keys.iter().map(|(voter, secret)|
+                        (*voter, crypto::Signature::new(&certificate.digest(), secret))).collect();
+                    certificate.verify(&committee).unwrap();
+                    if round == missing_round && creator == if missing_round == 1 { 2 } else { 0 } {
+                        omitted = Some(certificate.digest());
+                    }
+                    if round == 2 && creator == 2 {
+                        target = Some(certificate.digest());
+                    }
+                    next.push(certificate.digest());
+                    history.insert(certificate.digest(), certificate.clone());
+                    certificates.push(certificate);
+                }
+                previous = next;
+            }
+            assert_valid_quorum_parent_dag(&committee, &certificates);
+            let store = certificate_store(&certificates).await;
+            let (slices, _) = run_tusk_and_mrv(committee, certificates, 50, store).await;
+            let omitted = omitted.unwrap();
+            let target = target.unwrap();
+            // W=6 keeps the round-2 target active when the round-6 event
+            // first exports children of the omitted round-3 certificate.
+            let (mut production, mut production_output) = test_executor(4, 6);
+            let mut contributors = HashMap::new();
+            let mut ancestry_mismatches = 0;
+            let mut visibility_mismatches = 0;
+            let mut eligibility_mismatches = 0;
+            let mut pair_mismatches = 0;
+            let mut scc_mismatches = 0;
+            let mut order_mismatches = 0;
+            let mut first_difference = None;
+            let mut production_order = Vec::new();
+            let mut reference_order = Vec::new();
+            let mut sealed_slice_checks = 0;
+            for slice in &slices {
+                contributors.extend(slice.certificates.iter()
+                    .map(|certificate| (certificate.digest(), certificate.clone())));
+                for certificate in &slice.certificates {
+                    for parent in &certificate.header.parents {
+                        assert!(contributors.contains_key(parent) || history[parent].round() == 0,
+                            "the repaired committed prefix must contain each non-genesis parent");
+                    }
+                }
+                let frontier = production.frontier_round.max(slice.leader_round);
+                let sealing_members: Vec<_> = production.slices.values()
+                    .filter(|slice| slice.sealed.is_none() && frontier >= slice.seal_horizon)
+                    .map(|slice| slice.members.clone()).collect();
+                production.on_committed_slice(slice.clone()).await.unwrap();
+                let (mut reference, _) = test_executor(4, 6);
+                reference.store = history.clone();
+                let mut reference_targets: HashMap<_, _> = production.auf_states.iter()
+                    .map(|(digest, state)| (digest.clone(), state.round)).collect();
+                for members in &sealing_members {
+                    for digest in members {
+                        reference_targets.insert(digest.clone(), contributors[digest].round());
+                    }
+                }
+                // Recompute each ancestry from parent references, independent
+                // of update_seen_for_new_certificate and its cached sets.
+                for (target_digest, target_round) in &reference_targets {
+                    let mut expected: BTreeMap<Round, HashSet<PublicKey>> = BTreeMap::new();
+                    for (digest, certificate) in &contributors {
+                        let mut pending = vec![digest.clone()];
+                        let mut visited = HashSet::new();
+                        let mut sees_target = false;
+                        while let Some(current) = pending.pop() {
+                            if !visited.insert(current.clone()) { continue; }
+                            if current == *target_digest { sees_target = true; break; }
+                            pending.extend(history[&current].header.parents.iter().cloned());
+                        }
+                        if production.auf_states.contains_key(target_digest) {
+                            let actual = production.is_ancestor(target_digest, digest, *target_round);
+                            ancestry_mismatches += usize::from(actual != sees_target);
+                        }
+                        if sees_target {
+                            expected.entry(certificate.round()).or_default().insert(certificate.origin());
+                        }
+                    }
+                    reference.auf_states.insert(target_digest.clone(), AufState {
+                        round: *target_round,
+                        seen_by_round: expected.clone(),
+                    });
+                    if let Some(state) = production.auf_states.get(target_digest) {
+                        if state.seen_by_round != expected {
+                            visibility_mismatches += 1;
+                            first_difference.get_or_insert(slice.batch_index);
+                        }
+                        assert_eq!(state.seen_by_round, expected,
+                            "production visibility must equal independent recomputation");
+                        eligibility_mismatches += usize::from(production.is_eligible(target_digest)
+                            != reference.is_eligible(target_digest));
+                    }
+                }
+                // Reuse the existing graph routine only after independent
+                // evidence recomputation. This isolates cache/export effects;
+                // it is not an independent verification of the SCC algorithm.
+                for active_slice in production.slices.values().filter(|slice| slice.sealed.is_none()) {
+                    for (index, a) in active_slice.members.iter().enumerate() {
+                        for b in &active_slice.members[index + 1..] {
+                            if reference.causal_edge(a, b).is_some() { continue; }
+                            let expected = reference.compare_incomparable_pair(a, b,
+                                reference.is_eligible(a), reference.is_eligible(b));
+                            let actual = production.compare_incomparable_pair(a, b,
+                                production.is_eligible(a), production.is_eligible(b));
+                            pair_mismatches += usize::from(actual != expected);
+                        }
+                    }
+                    let expected = reference.order_slice(&active_slice.members);
+                    let actual = production.order_slice(&active_slice.members);
+                    scc_mismatches += usize::from(actual.ordered_sccs != expected.ordered_sccs);
+                    order_mismatches += usize::from(actual.order != expected.order);
+                }
+                if missing_round == 3 && slice.batch_index == 3 {
+                    assert_eq!(production.seen_count_at(&target, 4), reference.seen_count_at(&target, 4));
+                    println!("MRV_ActiveTargetReference event=3 target_round=2 comparison_round=4 production={} reference={}",
+                        production.seen_count_at(&target, 4), reference.seen_count_at(&target, 4));
+                }
+                let expected_release: Vec<_> = sealing_members.iter()
+                    .flat_map(|members| reference.order_slice(members).order).collect();
+                let mut actual_release = Vec::new();
+                while let Ok(certificate) = production_output.try_recv() {
+                    actual_release.push(certificate.digest());
+                }
+                assert_eq!(actual_release, expected_release,
+                    "final output must match reference at the selected sealing snapshot");
+                sealed_slice_checks += sealing_members.len();
+                production_order.extend(actual_release);
+                reference_order.extend(expected_release);
+            }
+            assert!(contributors.contains_key(&omitted));
+            assert!(!production.auf_states.contains_key(&target), "target must have sealed");
+            assert_eq!(ancestry_mismatches, 0);
+            assert_eq!(visibility_mismatches, 0);
+            assert_eq!(eligibility_mismatches, 0);
+            assert_eq!(pair_mismatches, 0);
+            assert_eq!(scc_mismatches, 0);
+            assert_eq!(order_mismatches, 0);
+            assert!(sealed_slice_checks > 0);
+            assert_eq!(production_order, reference_order);
+            println!("MRV_ExporterReference missing_round={} events={} ancestry_mismatches={} visibility_mismatches={} eligibility_mismatches={} pair_mismatches={} scc_mismatches={} order_mismatches={} first_difference={:?} sealed_slice_checks={} output_equal={}",
+                missing_round, slices.len(), ancestry_mismatches, visibility_mismatches,
+                eligibility_mismatches, pair_mismatches, scc_mismatches, order_mismatches,
+                first_difference, sealed_slice_checks, production_order == reference_order);
+        }
+    }
+
+    #[cfg(feature = "benchmark")]
+    #[tokio::test]
+    async fn exporter_late_execution_ancestor_probe() {
+        let mut rng = StdRng::seed_from_u64(0);
+        let mut keys: Vec<_> = (0..7).map(|_| crypto::generate_keypair(&mut rng)).collect();
+        keys.sort_by_key(|(name, _)| *name);
+        let names: Vec<_> = keys.iter().map(|(name, _)| *name).collect();
+        let committee = Committee {
+            authorities: names.iter().map(|name| (*name, Authority {
+                stake: 1,
+                primary: PrimaryAddresses {
+                    primary_to_primary: "127.0.0.1:0".parse().unwrap(),
+                    worker_to_primary: "127.0.0.1:0".parse().unwrap(),
+                },
+                workers: HashMap::new(),
+            })).collect(),
+        };
+        let genesis = Certificate::genesis(&committee);
+        let mut previous: Vec<_> = names.iter().map(|name| genesis.iter()
+            .find(|certificate| certificate.origin() == *name).unwrap().digest()).collect();
+        let mut certificates = Vec::new();
+        let mut history: HashMap<_, _> = genesis.into_iter()
+            .map(|certificate| (certificate.digest(), certificate)).collect();
+        let mut ancestor = None;
+        let mut descendant = None;
+        let mut omitted = None;
+        for round in 1..=17 {
+            let mut next = Vec::new();
+            for creator in 1..=7 {
+                let parent_creators: Vec<usize> = match (round, creator) {
+                    (3, 5 | 7) => vec![1, 2, 3, 4, 7],
+                    (3, _) => vec![1, 2, 3, 4, 5],
+                    (4, 5) => vec![1, 2, 3, 4, 6],
+                    (4..=8, 7) => vec![1, 2, 3, 4, 7],
+                    (4..=8, _) => vec![1, 2, 3, 4, 5],
+                    (1, _) => (1..=7).collect(), // Initial genesis parents.
+                    (2, _) => vec![1, 2, 3, 4, 5],
+                    _ => vec![1, 2, 3, 4, 7],
+                };
+                let mut header = Header {
+                    author: names[creator - 1],
+                    round,
+                    parents: parent_creators.iter().map(|index| previous[index - 1].clone()).collect(),
+                    ..Header::default()
+                };
+                header.id = header.digest();
+                header.signature = crypto::Signature::new(&header.id, &keys[creator - 1].1);
+                let mut certificate = Certificate { header, ..Certificate::default() };
+                certificate.votes = keys.iter().map(|(voter, secret)|
+                    (*voter, crypto::Signature::new(&certificate.digest(), secret))).collect();
+                certificate.verify(&committee).unwrap();
+                if round == 2 && creator == 7 { ancestor = Some(certificate.digest()); }
+                if round == 3 && creator == 5 { omitted = Some(certificate.digest()); }
+                if round == 4 && creator == 1 { descendant = Some(certificate.digest()); }
+                next.push(certificate.digest());
+                history.insert(certificate.digest(), certificate.clone());
+                certificates.push(certificate);
+            }
+            previous = next;
+        }
+        assert_valid_quorum_parent_dag(&committee, &certificates);
+        let ancestor = ancestor.unwrap();
+        let descendant = descendant.unwrap();
+        let omitted = omitted.unwrap();
+        let mut pending = vec![descendant.clone()];
+        let mut ancestry = HashSet::new();
+        while let Some(digest) = pending.pop() {
+            if ancestry.insert(digest.clone()) {
+                pending.extend(history[&digest].header.parents.iter().cloned());
+            }
+        }
+        assert!(ancestry.contains(&ancestor));
+        assert!(ancestry.contains(&omitted));
+        // Reusing the archive also checks that a new genesis-based stream does
+        // not inherit delivery markers from the preceding run.
+        let store = certificate_store(&certificates).await;
+        let mut previous_leaders = None;
+        for gc_depth in [50, 1] {
+            let (slices, output) = run_tusk_and_mrv(committee.clone(), certificates.clone(), gc_depth, store.clone()).await;
+            let leaders: Vec<_> = slices.iter().map(|slice| (slice.leader_round, slice.leader_digest.clone())).collect();
+            if let Some(previous) = &previous_leaders { assert_eq!(&leaders, previous); }
+            previous_leaders = Some(leaders);
+            let mut prefix: HashSet<_> = history.values().filter(|certificate| certificate.round() == 0)
+                .map(Certificate::digest).collect();
+            for slice in &slices {
+                for certificate in &slice.certificates {
+                    assert!(prefix.insert(certificate.digest()), "each execution digest is delivered once");
+                }
+                for certificate in &slice.certificates {
+                    assert!(certificate.header.parents.iter().all(|parent| prefix.contains(parent)));
+                }
+            }
+            let ancestor_slice = slices.iter().find(|slice| slice.certificates.iter()
+                .any(|certificate| certificate.digest() == ancestor)).unwrap().batch_index;
+            let descendant_slice = slices.iter().find(|slice| slice.certificates.iter()
+                .any(|certificate| certificate.digest() == descendant)).unwrap().batch_index;
+            assert!(ancestor_slice <= descendant_slice);
+            assert!(slices.iter().flat_map(|slice| &slice.certificates)
+                .any(|certificate| certificate.digest() == omitted));
+            let ancestor_position = output.iter().position(|digest| *digest == ancestor).unwrap();
+            let descendant_position = output.iter().position(|digest| *digest == descendant).unwrap();
+            assert!(ancestor_position < descendant_position);
+            // The repaired exporter must make registration-only updates sufficient;
+            // no metadata supplementation or historical replay is performed here.
+            let (mut production, _) = test_executor(7, 4);
+            let (tx_output, mut rx_output) = channel(128);
+            production.tx_output = tx_output;
+            let mut exported = HashMap::new();
+            for slice in &slices {
+                exported.extend(slice.certificates.iter()
+                    .map(|certificate| (certificate.digest(), certificate.clone())));
+                production.on_committed_slice(slice.clone()).await.unwrap();
+                while rx_output.try_recv().is_ok() {}
+                if production.auf_states.contains_key(&ancestor) {
+                    let mut expected = HashSet::new();
+                    for (digest, certificate) in &exported {
+                        if certificate.round() != 4 { continue; }
+                        let mut pending = vec![digest.clone()];
+                        let mut visited = HashSet::new();
+                        while let Some(current) = pending.pop() {
+                            if !visited.insert(current.clone()) { continue; }
+                            if current == ancestor {
+                                expected.insert(certificate.origin());
+                                break;
+                            }
+                            pending.extend(history[&current].header.parents.iter().cloned());
+                        }
+                    }
+                    let actual = production.seen_count_at(&ancestor, 4);
+                    assert_eq!(actual, expected.len());
+                    println!("MRV_LateTargetReference event={} target_round=2 comparison_round=4 production={} reference={}",
+                        slice.batch_index, actual, expected.len());
+                }
+            }
+            println!("MRV_ExporterLateAncestor gc_depth={} ancestor_round=2 ancestor_creator=7 ancestor_slice={} descendant_round=4 descendant_creator=1 descendant_slice={} omitted_round=3 omitted_creator=5 ancestor_output_position={} descendant_output_position={}",
+                gc_depth, ancestor_slice, descendant_slice, ancestor_position, descendant_position);
         }
     }
 

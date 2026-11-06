@@ -1,0 +1,266 @@
+[
+  {
+    "study": "phase2_priority_baseline_20261009",
+    "purpose": "Initial ordering reference",
+    "file": "phase2_priority_baseline_20261009-01.zip",
+    "bytes": 2641180,
+    "sha256": "dadc579bf70b36b2317205b5193ac298a6f545c7a6d590bac87b593f31a4a5cb",
+    "files": 91
+  },
+  {
+    "study": "phase2_late_certificate_transactions_20261009",
+    "purpose": "Certificate-withholding reference inputs",
+    "file": "phase2_late_certificate_transactions_20261009-01.zip",
+    "bytes": 5208907,
+    "sha256": "827635f97d4c41e303c1a0fc4e4210613d2ab92b2fb4a76749ddf7c0283cbeae",
+    "files": 317
+  },
+  {
+    "study": "phase2_optionality_matrix_20261009",
+    "purpose": "Controlled withholding inputs",
+    "file": "phase2_optionality_matrix_20261009-01.zip",
+    "bytes": 33362729,
+    "sha256": "d692310e435c8c632be650b9db3eb157434f93506528d86eb84861aab1dca149",
+    "files": 1846
+  },
+  {
+    "study": "phase2_payload_protocol_repair_20261009",
+    "purpose": "Certificate and payload validation inputs",
+    "file": "phase2_payload_protocol_repair_20261009-01.zip",
+    "bytes": 445620,
+    "sha256": "9fbaf07f5d9270e32c6454275f9429131f1c439c8bfadded683053efc040ce8c",
+    "files": 123
+  },
+  {
+    "study": "phase2_evidence_attribution_20261009",
+    "purpose": "Frozen evidence-corpus catalogue",
+    "file": "phase2_evidence_attribution_20261009-01.zip",
+    "bytes": 369426,
+    "sha256": "e585f27584f774555f1e1229d494f89f2ba96cb65717949dda93ff74dfacca7c",
+    "files": 12
+  },
+  {
+    "study": "phase2_visibility_structure_20261009",
+    "purpose": "Frozen structural-evidence inputs",
+    "file": "phase2_visibility_structure_20261009-01.zip",
+    "bytes": 64293,
+    "sha256": "bce33d225e72c534f6c0c4139333551a9f81ef0659379bb0ca259e73300c4144",
+    "files": 15
+  },
+  {
+    "study": "phase3_rep_20261012",
+    "purpose": "Release and parent-policy comparison",
+    "file": "phase3_rep_20261012-01.zip",
+    "bytes": 28946112,
+    "sha256": "9ca58da24e65118fb41d53a9c9e5d2212ad4ad6e77eb3eb907301ea69141dc3e",
+    "files": 1157
+  },
+  {
+    "study": "phase4_n7_ep_delivery_v2_20261013",
+    "purpose": "Seven-validator withholding inputs",
+    "file": "phase4_n7_ep_delivery_v2_20261013-01.zip",
+    "bytes": 6496123,
+    "sha256": "b0042a9e2f7918fd68f35b72545d8edf9f0bddea3ba5f780459f8f8f84e83679",
+    "files": 137
+  },
+  {
+    "study": "phase5_joint_release_parent_20261013",
+    "purpose": "Joint release-and-parent study",
+    "file": "phase5_joint_release_parent_20261013-01.zip",
+    "bytes": 37939473,
+    "sha256": "c7ee718337783b80ebcd7d6defd49f40a42919065598253197b48381401525b9",
+    "files": 834
+  },
+  {
+    "study": "phase5_joint_release_parent_20261013",
+    "purpose": "Joint release-and-parent study",
+    "file": "phase5_joint_release_parent_20261013-02.zip",
+    "bytes": 21046567,
+    "sha256": "d9dfa23d72c4c2b447b344eb8314e7660800da5d89a78cd6f55c6c74ee220180",
+    "files": 565
+  },
+  {
+    "study": "phase6_unknown_value_strategy_sequence_20261013",
+    "purpose": "Online strategy sequences",
+    "file": "phase6_unknown_value_strategy_sequence_20261013-01.zip",
+    "bytes": 38001147,
+    "sha256": "f647f020ec7eac150b1275f60b20bd80f7efc67f811169515e7fef46226de930",
+    "files": 459
+  },
+  {
+    "study": "phase6_unknown_value_strategy_sequence_20261013",
+    "purpose": "Online strategy sequences",
+    "file": "phase6_unknown_value_strategy_sequence_20261013-02.zip",
+    "bytes": 38149982,
+    "sha256": "d196305d9475f4158d04a3ea829d6f4ade811d287bae7b96e3e44e979fc7f01b",
+    "files": 336
+  },
+  {
+    "study": "phase6_unknown_value_strategy_sequence_20261013",
+    "purpose": "Online strategy sequences",
+    "file": "phase6_unknown_value_strategy_sequence_20261013-03.zip",
+    "bytes": 38022167,
+    "sha256": "ac4be6340e92e409a9b48a6690fe7a527d6b46b7f212479390cff3087192905b",
+    "files": 339
+  },
+  {
+    "study": "phase6_unknown_value_strategy_sequence_20261013",
+    "purpose": "Online strategy sequences",
+    "file": "phase6_unknown_value_strategy_sequence_20261013-04.zip",
+    "bytes": 38033415,
+    "sha256": "c7d088c4b8f9c5f1aa56754dee3b0aebc59133a086869c42d68d60369f3d6a39",
+    "files": 334
+  },
+  {
+    "study": "phase6_unknown_value_strategy_sequence_20261013",
+    "purpose": "Online strategy sequences",
+    "file": "phase6_unknown_value_strategy_sequence_20261013-05.zip",
+    "bytes": 38043603,
+    "sha256": "88f2c0bb8c03820aae52134999fcc1e8d1c14dff504e4129da32300f6e07495f",
+    "files": 356
+  },
+  {
+    "study": "phase6_unknown_value_strategy_sequence_20261013",
+    "purpose": "Online strategy sequences",
+    "file": "phase6_unknown_value_strategy_sequence_20261013-06.zip",
+    "bytes": 37855265,
+    "sha256": "f66e9bcf4304043674685cce6985f12a4add3f218efed114b5b6aea919833d3f",
+    "files": 378
+  },
+  {
+    "study": "phase6_unknown_value_strategy_sequence_20261013",
+    "purpose": "Online strategy sequences",
+    "file": "phase6_unknown_value_strategy_sequence_20261013-07.zip",
+    "bytes": 16123390,
+    "sha256": "40f6f8541eaa3d7b1a81c9ea62c7e7dbc0fad22bb363838f44039d3887bda110",
+    "files": 213
+  },
+  {
+    "study": "g3_strategy_value_audit_20261014_203228",
+    "purpose": "Recorded payoff audit",
+    "file": "g3_strategy_value_audit_20261014_203228-01.zip",
+    "bytes": 5930852,
+    "sha256": "337e2841619761217a8e397c443de43ab2d1a0969899ddc165491cf8a3bc0e9f",
+    "files": 29
+  },
+  {
+    "study": "g3_strategy_value_audit_20261015_020043",
+    "purpose": "Completed payoff audit",
+    "file": "g3_strategy_value_audit_20261015_020043-01.zip",
+    "bytes": 31444559,
+    "sha256": "d1395ec8292656b763cfa52315f8ac5222907675eafc29154202c458e7c4bd60",
+    "files": 408
+  },
+  {
+    "study": "robust_structural_precedence_20261014",
+    "purpose": "Conditional structural validity and compatible-input witness",
+    "file": "robust_structural_precedence_20261014-01.zip",
+    "bytes": 42444,
+    "sha256": "81341c6148ba39083d3587dc43cb0c82f18ed27e77d643fbc4ad3ad57a53b1b0",
+    "files": 7
+  },
+  {
+    "study": "mrv_window_evidence_timing_20261016_104907",
+    "purpose": "Window and evidence analysis",
+    "file": "mrv_window_evidence_timing_20261016_104907-01.zip",
+    "bytes": 3658138,
+    "sha256": "bcc70d2141067bee752de1e35016ac3f92f6e2fcd9d117cd14f7b63f531f4c44",
+    "files": 45
+  },
+  {
+    "study": "lock_round_structural_baseline_20261018_022329",
+    "purpose": "Structural-key and completion comparison",
+    "file": "lock_round_structural_baseline_20261018_022329-01.zip",
+    "bytes": 3253848,
+    "sha256": "a7555984d2f5dd707e971133a1191db56bc800a67b3ed7c584a13d44821ade2b",
+    "files": 44
+  },
+  {
+    "study": "claude_code_lock_order_corpus_20261017",
+    "purpose": "Frozen 391-execution structural audit",
+    "file": "claude_code_lock_order_corpus_20261017-01.zip",
+    "bytes": 58752,
+    "sha256": "5cadb9647ab035294676b5688e0a0156ee9a24bcd9b90bdfb60009ad7280a1d2",
+    "files": 7
+  },
+  {
+    "study": "claude_code_reachable_instances_20261018",
+    "purpose": "Structural replay inputs",
+    "file": "claude_code_reachable_instances_20261018-01.zip",
+    "bytes": 760551,
+    "sha256": "5daadbcacdd9f8c1042b5759f5d9ef2e033ff35e4d2008ef2089dbba47e3aa31",
+    "files": 15
+  },
+  {
+    "study": "claude_code_txn_outcome_20261018",
+    "purpose": "SQLite resource-reservation replay",
+    "file": "claude_code_txn_outcome_20261018-01.zip",
+    "bytes": 157700,
+    "sha256": "9aba4232cf8b03a2b57fe8dc8fdcfff89f97f182918e4d7ea476236286ee8d47",
+    "files": 14
+  },
+  {
+    "study": "mrv_short_window_adaptive_20261018_152815",
+    "purpose": "Window and offline snapshot sensitivity",
+    "file": "mrv_short_window_adaptive_20261018_152815-01.zip",
+    "bytes": 18556360,
+    "sha256": "1fa906f2db39b466bc355a57433c6d7d5331c72b257775b48ac0870c9d67a3fc",
+    "files": 792
+  },
+  {
+    "study": "claude_code_late_release_random_completion_20261019_001738",
+    "purpose": "Native withholding extension and completion analysis",
+    "file": "claude_code_late_release_random_completion_20261019_001738-01.zip",
+    "bytes": 28818642,
+    "sha256": "4804c04986a78b2039b221f1bdc8d9d975fffe0e7056da7ed15532eb5b49359a",
+    "files": 1835
+  },
+  {
+    "study": "claude_code_round_preserving_key_ablation_20261019_170505",
+    "purpose": "Round-preserving completion ablation",
+    "file": "claude_code_round_preserving_key_ablation_20261019_170505-01.zip",
+    "bytes": 223686,
+    "sha256": "44759c8f4d07a191b7d898ddef9d735dcc840041a11606db56c2071805179cc8",
+    "files": 22
+  },
+  {
+    "study": "claude_code_GT2_sameround_delay_20261020",
+    "purpose": "Independent replica-processing correspondence",
+    "file": "claude_code_GT2_sameround_delay_20261020-01.zip",
+    "bytes": 5477023,
+    "sha256": "700d344ea258a94168c5d575523ac8c528dadc3347b6a47f1be14d28ccc7c593",
+    "files": 240
+  },
+  {
+    "study": "claude_code_majority_acceptance_audit_20261020",
+    "purpose": "Replica acceptance audit under withholding",
+    "file": "claude_code_majority_acceptance_audit_20261020-01.zip",
+    "bytes": 14152,
+    "sha256": "06a885bd36eeb730ef4c5700e52f80681eee8a313405734877040fde707f78c2",
+    "files": 9
+  },
+  {
+    "study": "phase2_paired_60min_20261013_retry2",
+    "purpose": "Sustained processing and resource measurements",
+    "file": "phase2_paired_60min_20261013_retry2-01.zip",
+    "bytes": 37926058,
+    "sha256": "707ff3cea261b7c2332d171fba1cb5308688f2e1a99cc8fbb4756d615e3e5ddc",
+    "files": 65
+  },
+  {
+    "study": "phase2_paired_60min_20261013_retry2",
+    "purpose": "Sustained processing and resource measurements",
+    "file": "phase2_paired_60min_20261013_retry2-02.zip",
+    "bytes": 15595452,
+    "sha256": "0ac3da772899da01fc9266d95d6467aa01397d0cf9dbf43e4988c9cc9d1763bd",
+    "files": 21
+  },
+  {
+    "study": "phase2_dod_sampling_20261008",
+    "purpose": "DoD transaction-sample validation",
+    "file": "phase2_dod_sampling_20261008-01.zip",
+    "bytes": 969561,
+    "sha256": "024875d6d560c1808b5917a0c1350fe400228c5c5b928416d950f15e6e19fd9c",
+    "files": 54
+  }
+]

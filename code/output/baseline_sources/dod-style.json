@@ -1,0 +1,9 @@
+{
+  "baseline": "dod-style",
+  "head": "69598b9564a34b4fd283df39c60ec228ef3a246a",
+  "files": 359,
+  "archive": "dod-style.zip",
+  "archive_sha256": "80008590c8a68d6119d0eb0d2923fe5dc2dfb22d17e14532f596f96708f4ad4b",
+  "includes_working_tree_changes": true,
+  "credential_configuration": "Public placeholder settings replace environment-specific SSH-key paths."
+}

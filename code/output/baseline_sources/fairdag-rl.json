@@ -1,0 +1,9 @@
+{
+  "baseline": "fairdag-rl",
+  "head": "568a02ab61767e3c6430dc80e6f8969c2fced2bb",
+  "files": 2006,
+  "archive": "fairdag-rl.zip",
+  "archive_sha256": "18cfc690fd9a6c5a6c18a31e55ad010eb3b472e58a98b65aa6cd4ba7f7067b8b",
+  "includes_working_tree_changes": true,
+  "credential_configuration": "Public placeholder settings replace environment-specific SSH-key paths."
+}

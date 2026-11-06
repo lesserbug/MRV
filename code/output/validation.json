@@ -1,0 +1,20 @@
+{
+  "rust_tests": {
+    "consensus": 6,
+    "mrv_executor": 29,
+    "primary": 8,
+    "failures": 0,
+    "features": "benchmark"
+  },
+  "benchmark_log_tests": {
+    "passed": 24,
+    "failures": 0
+  },
+  "node_check": {
+    "features": "benchmark",
+    "locked": true,
+    "offline": true,
+    "result": "passed"
+  },
+  "scope": "Unit/regression tests and compilation of the synchronized source; no fresh AWS benchmark executions."
+}
