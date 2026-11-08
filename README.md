@@ -16,28 +16,11 @@ production software.
 
 ## Protocol overview
 
-MRV implements a fixed-window structural comparison:
-
-1. **Committed-slice registration.** Tusk `CommittedSubDag` outputs define the
-   vertices and native traversal order of each execution slice.
-2. **Fixed-snapshot visibility.** MRV reconstructs creator-level ancestry from
-   the committed prefix and seals a slice after its fixed horizon, determined
-   by the slice maximum round and the configured MRV window `W`.
-3. **Eligibility and pair verdicts.** For each causally incomparable pair, MRV
-   evaluates eligibility and one-sided visibility differences over the full
-   fixed pair window. The prototype uses `q_vis = 2f + 1` and `theta = f + 1`.
-4. **Deterministic graph completion.** MRV combines causal and qualifying
-   visibility edges, condenses strongly connected components, topologically
-   orders the condensation DAG, and uses a fixed key only for residual choices.
-
-MRV is conservative about structural evidence. An ineligible pair, a pair for
-which neither direction crosses `theta`, or a pair for which both directions
-cross receives no visibility-derived edge. Its residual order is then resolved
-by deterministic graph completion.
-
-With `theta = f + 1`, Byzantine creators alone cannot account for a crossing.
-The evidence remains structural rather than a transaction receive-order
-guarantee, and its ancestry may still reflect message scheduling.
+MRV derives additional within-slice ordering constraints from
+authenticated committed-DAG metadata while preserving causality,
+commitment decisions, and inter-slice order. Under the conditions
+established in the paper, these constraints are jointly enforceable
+independently of the completion key.
 
 ## Repository layout
 
